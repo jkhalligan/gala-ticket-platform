@@ -307,18 +307,5 @@ Cascade:
 
 ---
 
-# 14. Readiness for Implementation
-
-All decisions in this document are **final and approved** for schema generation.
-
-The next step is:
-
-```
-Generate the full Prisma schema.
-```
-
-This will turn this conceptual model into a concrete Postgres schema.
-
----
 
 End of DATA-MODEL-DESIGN-DECISIONS.md
