@@ -1,5 +1,9 @@
-// src/lib/validation/index.ts
-// Re-export all validation schemas
+// =============================================================================
+// Validation Schemas - Index
+// Re-export all validation schemas for unified imports
+// =============================================================================
 
-export * from './tables';
-export * from './guests';
+export * from "./checkout";
+export * from "./guests";
+export * from "./orders";
+export * from "./tables";
