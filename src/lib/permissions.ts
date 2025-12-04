@@ -1,70 +1,114 @@
-// src/lib/permissions.ts
-// Permission checking utilities for table and guest operations
-
-import { prisma } from './prisma';
-import type { TableRole, TableType } from '@prisma/client';
-
 // =============================================================================
-// TYPES
+// Permissions Library - Phase 4 Enhanced Version
+// =============================================================================
+// Comprehensive permission checking for table and guest operations
+// Implements the permission matrix from the design docs
 // =============================================================================
 
-export type TableAction = 
-  | 'view'
-  | 'edit'
-  | 'delete'
-  | 'add_guest'
-  | 'remove_guest'
-  | 'edit_guest'
-  | 'reassign_guest'
-  | 'manage_roles';
+import { prisma } from "./prisma";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+export type TableAction =
+  | "view"
+  | "edit"
+  | "add_guest"
+  | "remove_guest"
+  | "edit_guest"
+  | "manage_roles"
+  | "delete";
+
+export type TableRole = "OWNER" | "CO_OWNER" | "CAPTAIN" | "MANAGER" | "STAFF";
 
 export interface PermissionResult {
   allowed: boolean;
   reason?: string;
+  role?: TableRole | "ADMIN" | null;
 }
 
-export interface TableContext {
+export interface TablePermissionContext {
   tableId: string;
-  tableType: TableType;
+  tableType: "PREPAID" | "CAPTAIN_PAYG";
   primaryOwnerId: string;
 }
 
-// =============================================================================
-// ROLE HIERARCHY
-// =============================================================================
-
-const ROLE_HIERARCHY: Record<TableRole, number> = {
-  OWNER: 100,
-  CO_OWNER: 90,
-  CAPTAIN: 80,
-  MANAGER: 70,
-  STAFF: 60,
-};
-
-/**
- * Check if role1 is equal to or higher than role2
- */
-export function hasRoleOrHigher(userRole: TableRole, requiredRole: TableRole): boolean {
-  return ROLE_HIERARCHY[userRole] >= ROLE_HIERARCHY[requiredRole];
+export interface GuestRemovalContext {
+  guestAssignmentId: string;
+  guestUserId: string;
+  guestOrderId: string;
+  tableId: string;
+  tableType: "PREPAID" | "CAPTAIN_PAYG";
 }
 
 // =============================================================================
-// PERMISSION MATRIX
+// Permission Matrix
+// =============================================================================
+// 
+// | Table Type    | Actor        | View | Edit | Add Guest | Remove Guest | Edit Guest | Manage Roles |
+// |---------------|--------------|------|------|-----------|--------------|------------|--------------|
+// | PREPAID       | Owner        | ✅   | ✅   | ✅        | ✅           | ✅         | ✅           |
+// | PREPAID       | Co-owner     | ✅   | ✅   | ✅        | ✅           | ✅         | ❌           |
+// | PREPAID       | Manager      | ✅   | ✅   | ✅        | ✅           | ✅         | ❌           |
+// | PREPAID       | Staff        | ✅   | ❌   | ❌        | ❌           | ✅         | ❌           |
+// | CAPTAIN_PAYG  | Captain      | ✅   | ✅   | ✅        | ⚠️ Own only  | ✅         | ❌           |
+// | CAPTAIN_PAYG  | Co-owner     | ✅   | ✅   | ✅        | ⚠️ Own only  | ✅         | ❌           |
+// | Any           | Admin        | ✅   | ✅   | ✅        | ✅           | ✅         | ✅           |
+// | Any           | Guest (self) | ✅   | ❌   | ❌        | ❌           | ✅ (self)  | ❌           |
+//
 // =============================================================================
 
-/**
- * Permission matrix based on table type and role
- * 
- * | Table Type   | Actor        | Add Guest | Remove Guest    | Edit Guest |
- * |--------------|--------------|-----------|-----------------|------------|
- * | PREPAID      | Owner/Co     | ✅        | ✅              | ✅         |
- * | PREPAID      | Manager      | ✅        | ✅              | ✅         |
- * | CAPTAIN_PAYG | Captain      | ✅        | ⚠️ Own only     | ✅         |
- * | Any          | Admin        | ✅        | ✅              | ✅         |
- */
+const ROLE_PERMISSIONS: Record<TableRole, Record<TableAction, boolean>> = {
+  OWNER: {
+    view: true,
+    edit: true,
+    add_guest: true,
+    remove_guest: true,
+    edit_guest: true,
+    manage_roles: true,
+    delete: true,
+  },
+  CO_OWNER: {
+    view: true,
+    edit: true,
+    add_guest: true,
+    remove_guest: true,
+    edit_guest: true,
+    manage_roles: false,
+    delete: false,
+  },
+  CAPTAIN: {
+    view: true,
+    edit: true,
+    add_guest: true,
+    remove_guest: true, // Special handling for CAPTAIN_PAYG
+    edit_guest: true,
+    manage_roles: false,
+    delete: false,
+  },
+  MANAGER: {
+    view: true,
+    edit: true,
+    add_guest: true,
+    remove_guest: true,
+    edit_guest: true,
+    manage_roles: false,
+    delete: false,
+  },
+  STAFF: {
+    view: true,
+    edit: false,
+    add_guest: false,
+    remove_guest: false,
+    edit_guest: true,
+    manage_roles: false,
+    delete: false,
+  },
+};
 
 // =============================================================================
-// CORE PERMISSION FUNCTIONS
+// Core Permission Functions
 // =============================================================================
 
 /**
@@ -74,22 +118,27 @@ export async function getUserTableRole(
   userId: string,
   tableId: string
 ): Promise<TableRole | null> {
-  const role = await prisma.tableUserRole.findFirst({
-    where: {
-      user_id: userId,
-      table_id: tableId,
-    },
-    orderBy: {
-      // Get highest role if multiple
-      role: 'asc', // OWNER sorts before others
-    },
+  // Check if user is the primary owner
+  const table = await prisma.table.findUnique({
+    where: { id: tableId },
+    select: { primary_owner_id: true },
   });
 
-  return role?.role ?? null;
+  if (table?.primary_owner_id === userId) {
+    return "OWNER";
+  }
+
+  // Check TableUserRole
+  const tableRole = await prisma.tableUserRole.findFirst({
+    where: { table_id: tableId, user_id: userId },
+    select: { role: true },
+  });
+
+  return (tableRole?.role as TableRole) || null;
 }
 
 /**
- * Check if user is a super admin or organization admin
+ * Check if user is an organization admin
  */
 export async function isUserAdmin(
   userId: string,
@@ -108,128 +157,66 @@ export async function isUserAdmin(
 }
 
 /**
- * Get full table context for permission checking
- */
-export async function getTableContext(tableId: string): Promise<TableContext | null> {
-  const table = await prisma.table.findUnique({
-    where: { id: tableId },
-    select: {
-      id: true,
-      type: true,
-      primary_owner_id: true,
-    },
-  });
-
-  if (!table) return null;
-
-  return {
-    tableId: table.id,
-    tableType: table.type,
-    primaryOwnerId: table.primary_owner_id,
-  };
-}
-
-// =============================================================================
-// ACTION-SPECIFIC PERMISSIONS
-// =============================================================================
-
-/**
- * Check if user can perform an action on a table
+ * Check if user has permission to perform action on table
  */
 export async function checkTablePermission(
   userId: string,
   tableId: string,
   action: TableAction
 ): Promise<PermissionResult> {
-  // First check if user is admin
+  // 1. Get table details
   const table = await prisma.table.findUnique({
     where: { id: tableId },
     include: {
-      event: {
-        select: { organization_id: true },
-      },
+      event: { select: { organization_id: true } },
     },
   });
 
   if (!table) {
-    return { allowed: false, reason: 'Table not found' };
+    return { allowed: false, reason: "Table not found" };
   }
 
+  // 2. Check if user is admin
   const isAdmin = await isUserAdmin(userId, table.event.organization_id);
   if (isAdmin) {
-    return { allowed: true };
+    return { allowed: true, role: "ADMIN" };
   }
 
-  // Get user's role for this table
-  const userRole = await getUserTableRole(userId, tableId);
-  
-  // Check if user is primary owner (always has full access)
-  const isPrimaryOwner = table.primary_owner_id === userId;
+  // 3. Get user's table role
+  const role = await getUserTableRole(userId, tableId);
 
-  switch (action) {
-    case 'view':
-      // Anyone with a role can view
-      return userRole || isPrimaryOwner
-        ? { allowed: true }
-        : { allowed: false, reason: 'No access to this table' };
+  if (!role) {
+    // Check if user is a guest at this table (can view only)
+    const isGuest = await prisma.guestAssignment.findFirst({
+      where: { table_id: tableId, user_id: userId },
+    });
 
-    case 'edit':
-      // Owner, Co-owner, or Manager can edit table details
-      if (isPrimaryOwner) return { allowed: true };
-      if (userRole && hasRoleOrHigher(userRole, 'MANAGER')) {
-        return { allowed: true };
-      }
-      return { allowed: false, reason: 'Insufficient permissions to edit table' };
+    if (isGuest && action === "view") {
+      return { allowed: true, role: null };
+    }
 
-    case 'delete':
-      // Only owner can delete
-      if (isPrimaryOwner) return { allowed: true };
-      if (userRole === 'OWNER') return { allowed: true };
-      return { allowed: false, reason: 'Only table owner can delete' };
-
-    case 'add_guest':
-      // Owner, Co-owner, Captain, Manager can add guests
-      if (isPrimaryOwner) return { allowed: true };
-      if (userRole && hasRoleOrHigher(userRole, 'MANAGER')) {
-        return { allowed: true };
-      }
-      return { allowed: false, reason: 'Insufficient permissions to add guests' };
-
-    case 'remove_guest':
-      // Complex rules - handled separately
-      return { allowed: false, reason: 'Use checkRemoveGuestPermission instead' };
-
-    case 'edit_guest':
-      // Owner, Co-owner, Captain, Manager can edit guests
-      if (isPrimaryOwner) return { allowed: true };
-      if (userRole && hasRoleOrHigher(userRole, 'MANAGER')) {
-        return { allowed: true };
-      }
-      return { allowed: false, reason: 'Insufficient permissions to edit guests' };
-
-    case 'reassign_guest':
-      // Admin only (checked above)
-      return { allowed: false, reason: 'Only admins can reassign guests between tables' };
-
-    case 'manage_roles':
-      // Only owner can manage roles
-      if (isPrimaryOwner) return { allowed: true };
-      if (userRole === 'OWNER') return { allowed: true };
-      return { allowed: false, reason: 'Only table owner can manage roles' };
-
-    default:
-      return { allowed: false, reason: 'Unknown action' };
+    return { allowed: false, reason: "No permission for this table" };
   }
+
+  // 4. Check role permissions
+  const hasPermission = ROLE_PERMISSIONS[role]?.[action] ?? false;
+
+  if (!hasPermission) {
+    return { allowed: false, reason: `${role} cannot ${action.replace("_", " ")}`, role };
+  }
+
+  return { allowed: true, role };
 }
 
 /**
- * Special permission check for removing guests
- * CAPTAIN_PAYG tables: Captain cannot remove self-paying guests
+ * Special permission check for removing a guest
+ * Handles CAPTAIN_PAYG rule: captains cannot remove self-paying guests
  */
 export async function checkRemoveGuestPermission(
   userId: string,
   guestAssignmentId: string
 ): Promise<PermissionResult> {
+  // 1. Get guest assignment with related data
   const guest = await prisma.guestAssignment.findUnique({
     where: { id: guestAssignmentId },
     include: {
@@ -238,72 +225,117 @@ export async function checkRemoveGuestPermission(
           event: { select: { organization_id: true } },
         },
       },
-      order: {
-        select: { user_id: true },
+      order: { select: { user_id: true } },
+    },
+  });
+
+  if (!guest) {
+    return { allowed: false, reason: "Guest not found" };
+  }
+
+  if (!guest.table) {
+    return { allowed: false, reason: "Guest is not assigned to a table" };
+  }
+
+  // 2. Check if user is admin
+  const isAdmin = await isUserAdmin(userId, guest.table.event.organization_id);
+  if (isAdmin) {
+    return { allowed: true, role: "ADMIN" };
+  }
+
+  // 3. Get user's table role
+  const role = await getUserTableRole(userId, guest.table_id!);
+
+  if (!role) {
+    return { allowed: false, reason: "No permission for this table" };
+  }
+
+  // 4. PREPAID tables: role-based permission only
+  if (guest.table.type === "PREPAID") {
+    const hasPermission = ROLE_PERMISSIONS[role]?.remove_guest ?? false;
+    if (!hasPermission) {
+      return { allowed: false, reason: `${role} cannot remove guests`, role };
+    }
+    return { allowed: true, role };
+  }
+
+  // 5. CAPTAIN_PAYG tables: special rules
+  if (guest.table.type === "CAPTAIN_PAYG") {
+    // Check if this guest paid for themselves
+    const guestPaidForSelf = guest.order.user_id === guest.user_id;
+
+    if (guestPaidForSelf) {
+      // Self-paying guests can only be removed by:
+      // - The guest themselves
+      // - Admin
+      if (guest.user_id === userId) {
+        return { allowed: true, role };
+      }
+      return {
+        allowed: false,
+        reason: "Cannot remove self-paying guests from captain tables",
+        role,
+      };
+    }
+
+    // Non-self-paying guests can be removed by captain/managers
+    const hasPermission = ROLE_PERMISSIONS[role]?.remove_guest ?? false;
+    if (!hasPermission) {
+      return { allowed: false, reason: `${role} cannot remove guests`, role };
+    }
+    return { allowed: true, role };
+  }
+
+  return { allowed: false, reason: "Unknown table type" };
+}
+
+/**
+ * Check if user can edit a specific guest
+ */
+export async function checkEditGuestPermission(
+  userId: string,
+  guestAssignmentId: string
+): Promise<PermissionResult> {
+  // 1. Get guest assignment
+  const guest = await prisma.guestAssignment.findUnique({
+    where: { id: guestAssignmentId },
+    include: {
+      table: {
+        include: {
+          event: { select: { organization_id: true } },
+        },
       },
     },
   });
 
   if (!guest) {
-    return { allowed: false, reason: 'Guest assignment not found' };
+    return { allowed: false, reason: "Guest not found" };
   }
 
-  if (!guest.table) {
-    return { allowed: false, reason: 'Guest is not assigned to a table' };
+  // 2. User can always edit their own guest assignment
+  if (guest.user_id === userId) {
+    return { allowed: true, role: null };
   }
 
-  // Admins can always remove
-  const isAdmin = await isUserAdmin(userId, guest.table.event.organization_id);
-  if (isAdmin) {
-    return { allowed: true };
-  }
-
-  // Get user's role
-  const userRole = await getUserTableRole(userId, guest.table.id);
-  const isPrimaryOwner = guest.table.primary_owner_id === userId;
-
-  // PREPAID tables: Owner/Co-owner/Manager can remove anyone
-  if (guest.table.type === 'PREPAID') {
-    if (isPrimaryOwner || (userRole && hasRoleOrHigher(userRole, 'MANAGER'))) {
-      return { allowed: true };
-    }
-    return { allowed: false, reason: 'Insufficient permissions' };
-  }
-
-  // CAPTAIN_PAYG tables: More complex rules
-  if (guest.table.type === 'CAPTAIN_PAYG') {
-    // Check if this guest paid for themselves
-    const guestPaidSelf = guest.order.user_id === guest.user_id;
-
-    if (isPrimaryOwner || userRole === 'CAPTAIN') {
-      if (guestPaidSelf) {
-        // Cannot remove self-paying guests
-        return { 
-          allowed: false, 
-          reason: 'Cannot remove self-paying guests from captain tables' 
-        };
-      }
-      // Can remove guests that were assigned by others
-      return { allowed: true };
+  // 3. Check if user is admin
+  if (guest.table) {
+    const isAdmin = await isUserAdmin(userId, guest.table.event.organization_id);
+    if (isAdmin) {
+      return { allowed: true, role: "ADMIN" };
     }
 
-    // Managers can also remove non-self-paying guests
-    if (userRole && hasRoleOrHigher(userRole, 'MANAGER')) {
-      if (guestPaidSelf) {
-        return { 
-          allowed: false, 
-          reason: 'Cannot remove self-paying guests from captain tables' 
-        };
-      }
-      return { allowed: true };
+    // 4. Check table role permission
+    const role = await getUserTableRole(userId, guest.table_id!);
+    if (role && ROLE_PERMISSIONS[role]?.edit_guest) {
+      return { allowed: true, role };
     }
   }
 
-  return { allowed: false, reason: 'Insufficient permissions' };
+  return { allowed: false, reason: "No permission to edit this guest" };
 }
 
 /**
- * Check if user can access a guest assignment
+ * Check if user can view a specific guest
  */
 export async function checkGuestViewPermission(
   userId: string,
@@ -321,47 +353,169 @@ export async function checkGuestViewPermission(
   });
 
   if (!guest) {
-    return { allowed: false, reason: 'Guest assignment not found' };
+    return { allowed: false, reason: "Guest not found" };
   }
 
-  // User can always view their own assignment
+  // User can view their own assignment
   if (guest.user_id === userId) {
-    return { allowed: true };
+    return { allowed: true, role: null };
   }
 
-  // Admins can view all
+  // Check admin
   if (guest.table) {
     const isAdmin = await isUserAdmin(userId, guest.table.event.organization_id);
-    if (isAdmin) return { allowed: true };
+    if (isAdmin) {
+      return { allowed: true, role: "ADMIN" };
+    }
+
+    // Check table role
+    const role = await getUserTableRole(userId, guest.table_id!);
+    if (role) {
+      return { allowed: true, role };
+    }
+
+    // Check if viewer is also a guest at the same table
+    const isTableGuest = await prisma.guestAssignment.findFirst({
+      where: { table_id: guest.table_id, user_id: userId },
+    });
+    if (isTableGuest) {
+      return { allowed: true, role: null };
+    }
   }
 
-  // Table roles can view
-  if (guest.table_id) {
-    const userRole = await getUserTableRole(userId, guest.table_id);
-    if (userRole) return { allowed: true };
-  }
-
-  return { allowed: false, reason: 'No access to this guest' };
+  return { allowed: false, reason: "No permission to view this guest" };
 }
 
 /**
- * Check if user can edit their own guest info
+ * Check if user can transfer a ticket
  */
-export async function checkSelfEditPermission(
+export async function checkTicketTransferPermission(
   userId: string,
   guestAssignmentId: string
 ): Promise<PermissionResult> {
   const guest = await prisma.guestAssignment.findUnique({
     where: { id: guestAssignmentId },
+    include: {
+      order: { select: { user_id: true } },
+      table: {
+        include: {
+          event: { select: { organization_id: true } },
+        },
+      },
+    },
   });
 
   if (!guest) {
-    return { allowed: false, reason: 'Guest assignment not found' };
+    return { allowed: false, reason: "Guest not found" };
   }
 
+  // Check if user is admin
+  if (guest.table) {
+    const isAdmin = await isUserAdmin(userId, guest.table.event.organization_id);
+    if (isAdmin) {
+      return { allowed: true, role: "ADMIN" };
+    }
+  }
+
+  // User can transfer if they are the one assigned to the seat
   if (guest.user_id === userId) {
-    return { allowed: true };
+    return { allowed: true, role: null };
   }
 
-  return { allowed: false, reason: 'Can only edit your own information' };
+  // Order owner can transfer seats from their order
+  if (guest.order.user_id === userId) {
+    return { allowed: true, role: null };
+  }
+
+  // Table owner/co-owner can transfer for PREPAID tables
+  if (guest.table && guest.table.type === "PREPAID") {
+    const role = await getUserTableRole(userId, guest.table_id!);
+    if (role === "OWNER" || role === "CO_OWNER") {
+      return { allowed: true, role };
+    }
+  }
+
+  return { allowed: false, reason: "No permission to transfer this ticket" };
+}
+
+// =============================================================================
+// Bulk Permission Checks
+// =============================================================================
+
+/**
+ * Get all permissions for a user on a table
+ */
+export async function getTablePermissions(
+  userId: string,
+  tableId: string
+): Promise<{
+  role: TableRole | "ADMIN" | null;
+  permissions: Record<TableAction, boolean>;
+}> {
+  const table = await prisma.table.findUnique({
+    where: { id: tableId },
+    include: {
+      event: { select: { organization_id: true } },
+    },
+  });
+
+  if (!table) {
+    return {
+      role: null,
+      permissions: {
+        view: false,
+        edit: false,
+        add_guest: false,
+        remove_guest: false,
+        edit_guest: false,
+        manage_roles: false,
+        delete: false,
+      },
+    };
+  }
+
+  // Check admin
+  const isAdmin = await isUserAdmin(userId, table.event.organization_id);
+  if (isAdmin) {
+    return {
+      role: "ADMIN",
+      permissions: {
+        view: true,
+        edit: true,
+        add_guest: true,
+        remove_guest: true,
+        edit_guest: true,
+        manage_roles: true,
+        delete: true,
+      },
+    };
+  }
+
+  // Get role
+  const role = await getUserTableRole(userId, tableId);
+
+  if (!role) {
+    // Check if guest
+    const isGuest = await prisma.guestAssignment.findFirst({
+      where: { table_id: tableId, user_id: userId },
+    });
+
+    return {
+      role: null,
+      permissions: {
+        view: !!isGuest,
+        edit: false,
+        add_guest: false,
+        remove_guest: false,
+        edit_guest: !!isGuest, // Can edit own info
+        manage_roles: false,
+        delete: false,
+      },
+    };
+  }
+
+  return {
+    role,
+    permissions: ROLE_PERMISSIONS[role],
+  };
 }

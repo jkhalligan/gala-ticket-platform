@@ -1,41 +1,61 @@
-// src/app/api/guests/[id]/route.ts
-// GET: Get guest assignment by ID
-// PATCH: Update guest assignment
-// DELETE: Remove guest assignment
+// =============================================================================
+// Guest by ID API Route - Phase 4 Enhanced Version
+// =============================================================================
+// GET    /api/guests/[id]  - Get guest details
+// PATCH  /api/guests/[id]  - Update guest info
+// DELETE /api/guests/[id]  - Remove guest from table
+// =============================================================================
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
-import { UpdateGuestSchema } from '@/lib/validation/guests';
-import { 
-  checkGuestViewPermission, 
-  checkTablePermission,
+export const runtime = "nodejs";
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
+import {
+  checkGuestViewPermission,
+  checkEditGuestPermission,
   checkRemoveGuestPermission,
-  checkSelfEditPermission,
-} from '@/lib/permissions';
+} from "@/lib/permissions";
+import { z } from "zod";
 
 // =============================================================================
-// GET - Get Guest Assignment by ID
+// Update Schema
+// =============================================================================
+
+const GuestUpdateSchema = z.object({
+  display_name: z.string().max(200).optional().nullable(),
+  dietary_restrictions: z.any().optional().nullable(), // JSON
+  bidder_number: z.string().max(50).optional().nullable(),
+  auction_registered: z.boolean().optional(),
+});
+
+// =============================================================================
+// GET /api/guests/[id]
 // =============================================================================
 
 export async function GET(
-  request: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const { id } = await params;
 
-    // Check permission
-    const permission = await checkGuestViewPermission(user.id, id);
-    if (!permission.allowed) {
-      return NextResponse.json({ error: permission.reason }, { status: 403 });
+    // 1. Require authentication
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // 2. Check view permission
+    const permission = await checkGuestViewPermission(user.id, id);
+    if (!permission.allowed) {
+      return NextResponse.json(
+        { error: permission.reason || "Access denied" },
+        { status: 403 }
+      );
+    }
+
+    // 3. Fetch guest with relations
     const guest = await prisma.guestAssignment.findUnique({
       where: { id },
       include: {
@@ -54,7 +74,6 @@ export async function GET(
             name: true,
             slug: true,
             type: true,
-            capacity: true,
           },
         },
         order: {
@@ -70,136 +89,124 @@ export async function GET(
           select: {
             id: true,
             name: true,
-            slug: true,
-            event_date: true,
-            venue_name: true,
           },
         },
         tags: {
-          include: {
-            tag: true,
-          },
+          include: { tag: true },
         },
       },
     });
 
     if (!guest) {
-      return NextResponse.json({ error: 'Guest not found' }, { status: 404 });
+      return NextResponse.json({ error: "Guest not found" }, { status: 404 });
     }
 
-    // Check if this is the user's own record
-    const isOwnRecord = guest.user_id === user.id;
-
     return NextResponse.json({
-      guest,
-      currentUser: {
-        isOwnRecord,
-        isAdmin: user.isAdmin,
+      guest: {
+        id: guest.id,
+        event_id: guest.event_id,
+        table_id: guest.table_id,
+        user_id: guest.user_id,
+        order_id: guest.order_id,
+        display_name: guest.display_name,
+        dietary_restrictions: guest.dietary_restrictions,
+        bidder_number: guest.bidder_number,
+        auction_registered: guest.auction_registered,
+        checked_in_at: guest.checked_in_at?.toISOString() || null,
+        qr_code_token: guest.qr_code_token,
+        created_at: guest.created_at.toISOString(),
+        updated_at: guest.updated_at.toISOString(),
+        // User info
+        user: {
+          ...guest.user,
+          full_name: [guest.user.first_name, guest.user.last_name]
+            .filter(Boolean)
+            .join(" ") || null,
+        },
+        // Table info
+        table: guest.table,
+        // Event info
+        event: guest.event,
+        // Order info
+        order: {
+          ...guest.order,
+          is_buyer: guest.order.user_id === guest.user_id,
+        },
+        // Tags
+        tags: guest.tags.map((t) => t.tag),
+        // Derived fields
+        is_self_pay: guest.order.user_id === guest.user_id,
       },
+      // Include user's permission level
+      viewer_role: permission.role,
     });
+
   } catch (error) {
-    console.error('Get guest error:', error);
-    return NextResponse.json({ error: 'Failed to get guest' }, { status: 500 });
+    console.error("Error fetching guest:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch guest" },
+      { status: 500 }
+    );
   }
 }
 
 // =============================================================================
-// PATCH - Update Guest Assignment
+// PATCH /api/guests/[id]
 // =============================================================================
 
 export async function PATCH(
-  request: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const { id } = await params;
 
-    const guest = await prisma.guestAssignment.findUnique({
+    // 1. Require authentication
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // 2. Check edit permission
+    const permission = await checkEditGuestPermission(user.id, id);
+    if (!permission.allowed) {
+      return NextResponse.json(
+        { error: permission.reason || "Access denied" },
+        { status: 403 }
+      );
+    }
+
+    // 3. Get existing guest
+    const existingGuest = await prisma.guestAssignment.findUnique({
       where: { id },
       include: {
         table: {
-          include: {
-            event: { select: { organization_id: true } },
-          },
+          include: { event: true },
         },
       },
     });
 
-    if (!guest) {
-      return NextResponse.json({ error: 'Guest not found' }, { status: 404 });
+    if (!existingGuest) {
+      return NextResponse.json({ error: "Guest not found" }, { status: 404 });
     }
 
-    const body = await request.json();
-    const data = UpdateGuestSchema.parse(body);
+    // 4. Parse and validate update data
+    const body = await req.json();
+    const parseResult = GuestUpdateSchema.safeParse(body);
 
-    // Check permissions based on what's being updated
-    const isOwnRecord = guest.user_id === user.id;
-    
-    // Self-editable fields (dietary_restrictions, auction_registered for own record)
-    const selfEditableFields = ['dietary_restrictions', 'auction_registered', 'display_name'];
-    const requestedFields = Object.keys(data).filter(k => data[k as keyof typeof data] !== undefined);
-    const onlySelfEditableFields = requestedFields.every(f => selfEditableFields.includes(f));
-
-    if (isOwnRecord && onlySelfEditableFields) {
-      // User can edit their own basic info
-      const selfPermission = await checkSelfEditPermission(user.id, id);
-      if (!selfPermission.allowed) {
-        return NextResponse.json({ error: selfPermission.reason }, { status: 403 });
-      }
-    } else if (guest.table_id) {
-      // Need table edit permission for other fields
-      const permission = await checkTablePermission(user.id, guest.table_id, 'edit_guest');
-      if (!permission.allowed) {
-        return NextResponse.json({ error: permission.reason }, { status: 403 });
-      }
-    } else if (!user.isAdmin) {
-      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { error: "Validation failed", details: parseResult.error.flatten() },
+        { status: 400 }
+      );
     }
 
-    // If changing table, check permission on new table
-    if (data.table_id !== undefined && data.table_id !== guest.table_id) {
-      if (data.table_id) {
-        // Check if target table has capacity
-        const targetTable = await prisma.table.findUnique({
-          where: { id: data.table_id },
-          include: {
-            _count: { select: { guest_assignments: true } },
-          },
-        });
+    const updateData = parseResult.data;
 
-        if (!targetTable) {
-          return NextResponse.json({ error: 'Target table not found' }, { status: 404 });
-        }
-
-        if (targetTable._count.guest_assignments >= targetTable.capacity) {
-          return NextResponse.json({ error: 'Target table is full' }, { status: 400 });
-        }
-
-        // Only admins can reassign between tables
-        if (!user.isAdmin) {
-          return NextResponse.json(
-            { error: 'Only admins can reassign guests between tables' },
-            { status: 403 }
-          );
-        }
-      }
-    }
-
-    // Update the guest assignment
+    // 5. Update guest
     const updatedGuest = await prisma.guestAssignment.update({
       where: { id },
-      data: {
-        ...(data.table_id !== undefined && { table_id: data.table_id }),
-        ...(data.display_name !== undefined && { display_name: data.display_name }),
-        ...(data.dietary_restrictions !== undefined && { dietary_restrictions: data.dietary_restrictions }),
-        ...(data.bidder_number !== undefined && { bidder_number: data.bidder_number }),
-        ...(data.auction_registered !== undefined && { auction_registered: data.auction_registered }),
-      },
+      data: updateData,
       include: {
         user: {
           select: {
@@ -207,123 +214,137 @@ export async function PATCH(
             email: true,
             first_name: true,
             last_name: true,
-            phone: true,
-          },
-        },
-        table: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
           },
         },
       },
     });
 
-    // Log activity
-    if (guest.table?.event?.organization_id) {
+    // 6. Log activity
+    if (existingGuest.table) {
       await prisma.activityLog.create({
         data: {
-          organization_id: guest.table.event.organization_id,
-          event_id: guest.event_id,
+          organization_id: existingGuest.table.event.organization_id,
+          event_id: existingGuest.event_id,
           actor_id: user.id,
-          action: data.table_id !== undefined && data.table_id !== guest.table_id 
-            ? 'GUEST_REASSIGNED' 
-            : 'GUEST_UPDATED',
-          entity_type: 'GUEST_ASSIGNMENT',
-          entity_id: guest.id,
-          metadata: { 
-            changes: data,
-            previous_table_id: guest.table_id,
+          action: "GUEST_UPDATED",
+          entity_type: "GUEST_ASSIGNMENT",
+          entity_id: id,
+          metadata: {
+            changes: updateData,
+            table_id: existingGuest.table_id,
           },
         },
       });
     }
 
-    return NextResponse.json({ guest: updatedGuest });
+    return NextResponse.json({
+      success: true,
+      guest: {
+        id: updatedGuest.id,
+        display_name: updatedGuest.display_name,
+        dietary_restrictions: updatedGuest.dietary_restrictions,
+        bidder_number: updatedGuest.bidder_number,
+        auction_registered: updatedGuest.auction_registered,
+        updated_at: updatedGuest.updated_at.toISOString(),
+        user: {
+          ...updatedGuest.user,
+          full_name: [updatedGuest.user.first_name, updatedGuest.user.last_name]
+            .filter(Boolean)
+            .join(" ") || null,
+        },
+      },
+    });
+
   } catch (error) {
-    console.error('Update guest error:', error);
-
-    if (error instanceof Error && error.name === 'ZodError') {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
-    }
-
-    return NextResponse.json({ error: 'Failed to update guest' }, { status: 500 });
+    console.error("Error updating guest:", error);
+    return NextResponse.json(
+      { error: "Failed to update guest" },
+      { status: 500 }
+    );
   }
 }
 
 // =============================================================================
-// DELETE - Remove Guest Assignment
+// DELETE /api/guests/[id]
 // =============================================================================
 
 export async function DELETE(
-  request: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const { id } = await params;
 
-    // Check permission (complex rules for CAPTAIN_PAYG tables)
-    const permission = await checkRemoveGuestPermission(user.id, id);
-    if (!permission.allowed) {
-      return NextResponse.json({ error: permission.reason }, { status: 403 });
+    // 1. Require authentication
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // 2. Check remove permission (includes CAPTAIN_PAYG special rules)
+    const permission = await checkRemoveGuestPermission(user.id, id);
+    if (!permission.allowed) {
+      return NextResponse.json(
+        { error: permission.reason || "Access denied" },
+        { status: 403 }
+      );
+    }
+
+    // 3. Get guest before deletion for logging
     const guest = await prisma.guestAssignment.findUnique({
       where: { id },
       include: {
+        user: { select: { email: true, first_name: true, last_name: true } },
         table: {
-          include: {
-            event: { select: { organization_id: true } },
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            email: true,
-            first_name: true,
-            last_name: true,
-          },
+          include: { event: true },
         },
       },
     });
 
     if (!guest) {
-      return NextResponse.json({ error: 'Guest not found' }, { status: 404 });
+      return NextResponse.json({ error: "Guest not found" }, { status: 404 });
     }
 
-    // Delete the guest assignment
+    // 4. Delete guest assignment
     await prisma.guestAssignment.delete({
       where: { id },
     });
 
-    // Log activity
-    if (guest.table?.event?.organization_id) {
+    // 5. Log activity
+    if (guest.table) {
       await prisma.activityLog.create({
         data: {
           organization_id: guest.table.event.organization_id,
           event_id: guest.event_id,
           actor_id: user.id,
-          action: 'GUEST_REMOVED',
-          entity_type: 'GUEST_ASSIGNMENT',
-          entity_id: guest.id,
+          action: "GUEST_REMOVED",
+          entity_type: "GUEST_ASSIGNMENT",
+          entity_id: id,
           metadata: {
-            removed_user_id: guest.user_id,
-            removed_user_email: guest.user?.email,
+            guest_email: guest.user.email,
+            guest_name: [guest.user.first_name, guest.user.last_name]
+              .filter(Boolean)
+              .join(" "),
             table_id: guest.table_id,
+            table_name: guest.table.name,
+            order_id: guest.order_id,
           },
         },
       });
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      message: "Guest removed from table",
+      // Note: The order still exists - this just removes the assignment
+      // The seat becomes a "placeholder" again
+    });
+
   } catch (error) {
-    console.error('Delete guest error:', error);
-    return NextResponse.json({ error: 'Failed to delete guest' }, { status: 500 });
+    console.error("Error removing guest:", error);
+    return NextResponse.json(
+      { error: "Failed to remove guest" },
+      { status: 500 }
+    );
   }
 }

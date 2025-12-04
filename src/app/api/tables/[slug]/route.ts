@@ -1,327 +1,72 @@
-// src/app/api/tables/[slug]/route.ts
-// GET: Get table by slug
-// PATCH: Update table
+// =============================================================================
+// Table by Slug API Route - Phase 4 Enhanced Version
+// =============================================================================
+// GET   /api/tables/[slug]  - Get table with full dashboard data
+// PATCH /api/tables/[slug]  - Update table
+// =============================================================================
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
-import { UpdateTableSchema } from '@/lib/validation/tables';
-import { checkTablePermission } from '@/lib/permissions';
+export const runtime = "nodejs";
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
+import {
+  checkTablePermission,
+  getTablePermissions,
+} from "@/lib/permissions";
+import { z } from "zod";
 
 // =============================================================================
-// GET - Get Table by Slug
+// Update Schema
+// =============================================================================
+
+const TableUpdateSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  internal_name: z.string().max(100).optional().nullable(),
+  capacity: z.number().int().min(1).max(50).optional(),
+  status: z.enum(["ACTIVE", "CLOSED", "ARCHIVED"]).optional(),
+  custom_total_price_cents: z.number().int().min(0).optional().nullable(),
+  seat_price_cents: z.number().int().min(0).optional().nullable(),
+  payment_status: z.enum(["NOT_APPLICABLE", "UNPAID", "PAID_OFFLINE", "COMPED"]).optional(),
+  payment_notes: z.string().max(500).optional().nullable(),
+});
+
+// =============================================================================
+// GET /api/tables/[slug]
 // =============================================================================
 
 export async function GET(
-  request: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   try {
+    const { slug } = await params;
+    const { searchParams } = new URL(req.url);
+    const eventId = searchParams.get("event_id");
+
+    // 1. Require authentication
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { slug } = await params;
-
-    // Get event_id from query params (required for unique lookup)
-    const eventId = request.nextUrl.searchParams.get('event_id');
-
-    let table;
-
+    // 2. Find table by slug (and optionally event_id for disambiguation)
+    const where: any = { slug };
     if (eventId) {
-      // Lookup by event_id + slug (unique)
-      table = await prisma.table.findUnique({
-        where: {
-          event_id_slug: {
-            event_id: eventId,
-            slug,
-          },
-        },
-        include: {
-          primary_owner: {
-            select: {
-              id: true,
-              email: true,
-              first_name: true,
-              last_name: true,
-            },
-          },
-          event: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              organization_id: true,
-            },
-          },
-          user_roles: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  email: true,
-                  first_name: true,
-                  last_name: true,
-                },
-              },
-            },
-          },
-          guest_assignments: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  email: true,
-                  first_name: true,
-                  last_name: true,
-                  phone: true,
-                },
-              },
-              order: {
-                select: {
-                  id: true,
-                  user_id: true,
-                  amount_cents: true,
-                  status: true,
-                },
-              },
-            },
-            orderBy: { created_at: 'asc' },
-          },
-          orders: {
-            select: {
-              id: true,
-              user_id: true,
-              quantity: true,
-              amount_cents: true,
-              status: true,
-              _count: {
-                select: { guest_assignments: true },
-              },
-            },
-            where: {
-              status: { in: ['COMPLETED', 'PENDING'] },
-            },
-          },
-          tags: {
-            include: {
-              tag: true,
-            },
-          },
-        },
-      });
-    } else {
-      // Fallback: search by slug alone (may return wrong table if duplicates)
-      table = await prisma.table.findFirst({
-        where: { slug },
-        include: {
-          primary_owner: {
-            select: {
-              id: true,
-              email: true,
-              first_name: true,
-              last_name: true,
-            },
-          },
-          event: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              organization_id: true,
-            },
-          },
-          user_roles: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  email: true,
-                  first_name: true,
-                  last_name: true,
-                },
-              },
-            },
-          },
-          guest_assignments: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  email: true,
-                  first_name: true,
-                  last_name: true,
-                  phone: true,
-                },
-              },
-              order: {
-                select: {
-                  id: true,
-                  user_id: true,
-                  amount_cents: true,
-                  status: true,
-                },
-              },
-            },
-            orderBy: { created_at: 'asc' },
-          },
-          orders: {
-            select: {
-              id: true,
-              user_id: true,
-              quantity: true,
-              amount_cents: true,
-              status: true,
-              _count: {
-                select: { guest_assignments: true },
-              },
-            },
-            where: {
-              status: { in: ['COMPLETED', 'PENDING'] },
-            },
-          },
-          tags: {
-            include: {
-              tag: true,
-            },
-          },
-        },
-      });
+      where.event_id = eventId;
     }
 
-    if (!table) {
-      return NextResponse.json({ error: 'Table not found' }, { status: 404 });
-    }
-
-    // Check view permission
-    const permission = await checkTablePermission(user.id, table.id, 'view');
-    if (!permission.allowed) {
-      return NextResponse.json({ error: permission.reason }, { status: 403 });
-    }
-
-    // Calculate seat statistics
-    const totalPurchasedSeats = table.orders.reduce((sum, order) => sum + order.quantity, 0);
-    const filledSeats = table.guest_assignments.length;
-    const placeholderSeats = totalPurchasedSeats - filledSeats;
-    const remainingCapacity = table.capacity - totalPurchasedSeats;
-
-    // Get user's role for this table
-    const userRole = table.user_roles.find((r) => r.user_id === user.id)?.role;
-    const isPrimaryOwner = table.primary_owner_id === user.id;
-
-    return NextResponse.json({
-      table: {
-        ...table,
-        stats: {
-          capacity: table.capacity,
-          totalPurchasedSeats,
-          filledSeats,
-          placeholderSeats,
-          remainingCapacity,
-        },
-        currentUser: {
-          role: userRole || (isPrimaryOwner ? 'OWNER' : null),
-          isPrimaryOwner,
-          isAdmin: user.isAdmin,
-        },
-      },
-    });
-  } catch (error) {
-    console.error('Get table error:', error);
-    return NextResponse.json({ error: 'Failed to get table' }, { status: 500 });
-  }
-}
-
-// =============================================================================
-// PATCH - Update Table
-// =============================================================================
-
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ slug: string }> }
-) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { slug } = await params;
-    const eventId = request.nextUrl.searchParams.get('event_id');
-
-    // Find the table
-    let table;
-    if (eventId) {
-      table = await prisma.table.findUnique({
-        where: {
-          event_id_slug: {
-            event_id: eventId,
-            slug,
-          },
-        },
-        include: {
-          event: { select: { organization_id: true } },
-        },
-      });
-    } else {
-      table = await prisma.table.findFirst({
-        where: { slug },
-        include: {
-          event: { select: { organization_id: true } },
-        },
-      });
-    }
-
-    if (!table) {
-      return NextResponse.json({ error: 'Table not found' }, { status: 404 });
-    }
-
-    // Check edit permission
-    const permission = await checkTablePermission(user.id, table.id, 'edit');
-    if (!permission.allowed) {
-      return NextResponse.json({ error: permission.reason }, { status: 403 });
-    }
-
-    const body = await request.json();
-    const data = UpdateTableSchema.parse(body);
-
-    // If changing slug, check for conflicts
-    if (data.slug && data.slug !== table.slug) {
-      const existingTable = await prisma.table.findUnique({
-        where: {
-          event_id_slug: {
-            event_id: table.event_id,
-            slug: data.slug,
-          },
-        },
-      });
-
-      if (existingTable) {
-        return NextResponse.json(
-          { error: 'A table with this slug already exists' },
-          { status: 409 }
-        );
-      }
-    }
-
-    // Update the table
-    const updatedTable = await prisma.table.update({
-      where: { id: table.id },
-      data: {
-        ...(data.name !== undefined && { name: data.name }),
-        ...(data.slug !== undefined && { slug: data.slug }),
-        ...(data.welcome_message !== undefined && { welcome_message: data.welcome_message }),
-        ...(data.internal_name !== undefined && { internal_name: data.internal_name }),
-        ...(data.table_number !== undefined && { table_number: data.table_number }),
-        ...(data.status !== undefined && { status: data.status }),
-        ...(data.capacity !== undefined && { capacity: data.capacity }),
-        ...(data.custom_total_price_cents !== undefined && { custom_total_price_cents: data.custom_total_price_cents }),
-        ...(data.seat_price_cents !== undefined && { seat_price_cents: data.seat_price_cents }),
-        ...(data.payment_status !== undefined && { payment_status: data.payment_status }),
-        ...(data.payment_notes !== undefined && { payment_notes: data.payment_notes }),
-      },
+    const table = await prisma.table.findFirst({
+      where,
       include: {
+        event: {
+          select: {
+            id: true,
+            name: true,
+            event_date: true,
+            organization_id: true,
+          },
+        },
         primary_owner: {
           select: {
             id: true,
@@ -330,37 +75,366 @@ export async function PATCH(
             last_name: true,
           },
         },
-        event: {
+        user_roles: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                first_name: true,
+                last_name: true,
+              },
+            },
+          },
+        },
+        guest_assignments: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                first_name: true,
+                last_name: true,
+                phone: true,
+              },
+            },
+            order: {
+              select: {
+                id: true,
+                user_id: true,
+                quantity: true,
+                amount_cents: true,
+                status: true,
+              },
+            },
+            tags: {
+              include: {
+                tag: {
+                  select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                    color: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { created_at: "asc" },
+        },
+        orders: {
+          where: { status: "COMPLETED" },
           select: {
             id: true,
-            name: true,
-            slug: true,
+            user_id: true,
+            quantity: true,
+            amount_cents: true,
+            status: true,
+            created_at: true,
+          },
+        },
+        tags: {
+          include: {
+            tag: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                color: true,
+              },
+            },
           },
         },
       },
     });
 
-    // Log activity
+    if (!table) {
+      return NextResponse.json({ error: "Table not found" }, { status: 404 });
+    }
+
+    // 3. Check view permission
+    const viewPermission = await checkTablePermission(user.id, table.id, "view");
+    if (!viewPermission.allowed) {
+      return NextResponse.json(
+        { error: viewPermission.reason || "Access denied" },
+        { status: 403 }
+      );
+    }
+
+    // 4. Get user's permissions for this table
+    const permissions = await getTablePermissions(user.id, table.id);
+
+    // 5. Calculate seat statistics
+    const stats = calculateTableStats(table);
+
+    // 6. Format guest assignments
+    const guests = table.guest_assignments.map((ga) => ({
+      id: ga.id,
+      user_id: ga.user_id,
+      order_id: ga.order_id,
+      display_name: ga.display_name,
+      dietary_restrictions: ga.dietary_restrictions,
+      bidder_number: ga.bidder_number,
+      auction_registered: ga.auction_registered,
+      checked_in_at: ga.checked_in_at?.toISOString() || null,
+      created_at: ga.created_at.toISOString(),
+      // User info
+      user: {
+        id: ga.user.id,
+        email: ga.user.email,
+        first_name: ga.user.first_name,
+        last_name: ga.user.last_name,
+        phone: ga.user.phone,
+        full_name: [ga.user.first_name, ga.user.last_name].filter(Boolean).join(" ") || null,
+      },
+      // Order info (for determining if self-pay)
+      is_self_pay: ga.order.user_id === ga.user_id,
+      order: {
+        id: ga.order.id,
+        buyer_id: ga.order.user_id,
+        amount_cents: ga.order.amount_cents,
+      },
+      // Tags
+      tags: ga.tags.map((t) => t.tag),
+    }));
+
+    // 7. Format roles
+    const roles = [
+      // Primary owner is always OWNER
+      {
+        user_id: table.primary_owner_id,
+        role: "OWNER" as const,
+        user: {
+          id: table.primary_owner.id,
+          email: table.primary_owner.email,
+          first_name: table.primary_owner.first_name,
+          last_name: table.primary_owner.last_name,
+          full_name: [table.primary_owner.first_name, table.primary_owner.last_name]
+            .filter(Boolean)
+            .join(" ") || null,
+        },
+      },
+      // Additional roles from TableUserRole
+      ...table.user_roles
+        .filter((r) => r.user_id !== table.primary_owner_id || r.role !== "OWNER")
+        .map((r) => ({
+          user_id: r.user_id,
+          role: r.role,
+          user: {
+            id: r.user.id,
+            email: r.user.email,
+            first_name: r.user.first_name,
+            last_name: r.user.last_name,
+            full_name: [r.user.first_name, r.user.last_name].filter(Boolean).join(" ") || null,
+          },
+        })),
+    ];
+
+    // 8. Build response
+    return NextResponse.json({
+      table: {
+        id: table.id,
+        event_id: table.event_id,
+        primary_owner_id: table.primary_owner_id,
+        name: table.name,
+        internal_name: table.internal_name,
+        slug: table.slug,
+        type: table.type,
+        capacity: table.capacity,
+        status: table.status,
+        custom_total_price_cents: table.custom_total_price_cents,
+        seat_price_cents: table.seat_price_cents,
+        payment_status: table.payment_status,
+        payment_notes: table.payment_notes,
+        created_at: table.created_at.toISOString(),
+        updated_at: table.updated_at.toISOString(),
+        // Event
+        event: {
+          id: table.event.id,
+          name: table.event.name,
+          event_date: table.event.event_date?.toISOString() || null,
+        },
+        // Owner
+        primary_owner: {
+          id: table.primary_owner.id,
+          email: table.primary_owner.email,
+          first_name: table.primary_owner.first_name,
+          last_name: table.primary_owner.last_name,
+          full_name: [table.primary_owner.first_name, table.primary_owner.last_name]
+            .filter(Boolean)
+            .join(" ") || null,
+        },
+        // Tags
+        tags: table.tags.map((t) => t.tag),
+      },
+      // Statistics
+      stats,
+      // Guest assignments
+      guests,
+      // Roles
+      roles,
+      // User's permissions
+      permissions: {
+        role: permissions.role,
+        can_view: permissions.permissions.view,
+        can_edit: permissions.permissions.edit,
+        can_add_guest: permissions.permissions.add_guest,
+        can_remove_guest: permissions.permissions.remove_guest,
+        can_edit_guest: permissions.permissions.edit_guest,
+        can_manage_roles: permissions.permissions.manage_roles,
+        can_delete: permissions.permissions.delete,
+      },
+    });
+
+  } catch (error) {
+    console.error("Error fetching table:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch table" },
+      { status: 500 }
+    );
+  }
+}
+
+// =============================================================================
+// PATCH /api/tables/[slug]
+// =============================================================================
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ slug: string }> }
+) {
+  try {
+    const { slug } = await params;
+
+    // 1. Require authentication
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // 2. Find table
+    const table = await prisma.table.findFirst({
+      where: { slug },
+      include: { event: true },
+    });
+
+    if (!table) {
+      return NextResponse.json({ error: "Table not found" }, { status: 404 });
+    }
+
+    // 3. Check edit permission
+    const editPermission = await checkTablePermission(user.id, table.id, "edit");
+    if (!editPermission.allowed) {
+      return NextResponse.json(
+        { error: editPermission.reason || "Access denied" },
+        { status: 403 }
+      );
+    }
+
+    // 4. Parse and validate update data
+    const body = await req.json();
+    const parseResult = TableUpdateSchema.safeParse(body);
+
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { error: "Validation failed", details: parseResult.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    const updateData = parseResult.data;
+
+    // 5. Update table
+    const updatedTable = await prisma.table.update({
+      where: { id: table.id },
+      data: updateData,
+    });
+
+    // 6. Log activity
     await prisma.activityLog.create({
       data: {
         organization_id: table.event.organization_id,
         event_id: table.event_id,
         actor_id: user.id,
-        action: 'TABLE_UPDATED',
-        entity_type: 'TABLE',
+        action: "TABLE_UPDATED",
+        entity_type: "TABLE",
         entity_id: table.id,
-        metadata: { changes: data },
+        metadata: {
+          changes: updateData,
+          previous_values: {
+            name: table.name,
+            status: table.status,
+            capacity: table.capacity,
+          },
+        },
       },
     });
 
-    return NextResponse.json({ table: updatedTable });
+    return NextResponse.json({
+      success: true,
+      table: {
+        id: updatedTable.id,
+        name: updatedTable.name,
+        internal_name: updatedTable.internal_name,
+        slug: updatedTable.slug,
+        type: updatedTable.type,
+        capacity: updatedTable.capacity,
+        status: updatedTable.status,
+        updated_at: updatedTable.updated_at.toISOString(),
+      },
+    });
+
   } catch (error) {
-    console.error('Update table error:', error);
-
-    if (error instanceof Error && error.name === 'ZodError') {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
-    }
-
-    return NextResponse.json({ error: 'Failed to update table' }, { status: 500 });
+    console.error("Error updating table:", error);
+    return NextResponse.json(
+      { error: "Failed to update table" },
+      { status: 500 }
+    );
   }
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+interface TableWithOrders {
+  capacity: number;
+  orders: Array<{ quantity: number }>;
+  guest_assignments: Array<{ id: string }>;
+}
+
+function calculateTableStats(table: TableWithOrders) {
+  // Total seats purchased (from completed orders)
+  const totalPurchased = table.orders.reduce((sum, o) => sum + o.quantity, 0);
+
+  // Seats with actual guest assignments
+  const filledSeats = table.guest_assignments.length;
+
+  // Placeholder seats (purchased but not yet assigned)
+  const placeholderSeats = Math.max(0, totalPurchased - filledSeats);
+
+  // Remaining capacity (can still be purchased)
+  const remainingCapacity = Math.max(0, table.capacity - totalPurchased);
+
+  // Is the table at capacity?
+  const isFull = remainingCapacity <= 0;
+
+  // Is the table fully assigned? (all purchased seats have guests)
+  const isFullyAssigned = placeholderSeats <= 0 && filledSeats >= totalPurchased;
+
+  return {
+    capacity: table.capacity,
+    total_purchased: totalPurchased,
+    filled_seats: filledSeats,
+    placeholder_seats: placeholderSeats,
+    remaining_capacity: remainingCapacity,
+    is_full: isFull,
+    is_fully_assigned: isFullyAssigned,
+    fill_percentage: table.capacity > 0 
+      ? Math.round((totalPurchased / table.capacity) * 100) 
+      : 0,
+    assignment_percentage: totalPurchased > 0 
+      ? Math.round((filledSeats / totalPurchased) * 100) 
+      : 0,
+  };
 }
