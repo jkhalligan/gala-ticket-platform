@@ -1,4 +1,18 @@
-// prisma/schema.prisma
+// =============================================================================
+// Pink Gala Platform – Prisma Schema (v2)
+// =============================================================================
+// CHANGELOG from v1:
+// - FIXED: Removed invalid polymorphic relations from SheetRowMapping
+// - FIXED: Added PromoCode → Event relation
+// - FIXED: Changed dietary_restrictions from String[] to Json
+// - ADDED: Table pricing fields (custom_total_price_cents, seat_price_cents)
+// - ADDED: TablePaymentStatus enum for offline payment tracking
+// - ADDED: TableStatus enum (ACTIVE, CLOSED, ARCHIVED)
+// - ADDED: Admin-created order fields for reserved ticket invitations
+// - ADDED: AWAITING_PAYMENT, EXPIRED to OrderStatus
+// - ADDED: WaitlistEntry.email, made user_id nullable
+// - ADDED: Composite index on GuestAssignment (event_id, table_id)
+// =============================================================================
 
 generator client {
   provider = "prisma-client-js"
@@ -8,6 +22,680 @@ datasource db {
   provider = "postgresql"
 }
 
-model Placeholder {
-  id String @id @default(cuid())
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum TableType {
+  PREPAID       // Host pays for all seats upfront (or offline)
+  CAPTAIN_PAYG  // Captain recruits guests who pay individually
+}
+
+enum TableStatus {
+  ACTIVE        // Table is active and accepting guests
+  CLOSED        // No more purchases/claims allowed
+  ARCHIVED      // Historical, hidden from active views
+}
+
+enum TablePaymentStatus {
+  NOT_APPLICABLE  // Captain tables (guests pay individually)
+  UNPAID          // Awaiting offline payment (invoice sent)
+  PAID_OFFLINE    // Check/wire/invoice payment received
+  COMPED          // No payment expected ($0 table)
+}
+
+enum TableRole {
+  OWNER
+  CO_OWNER
+  CAPTAIN
+  MANAGER
+  STAFF
+}
+
+enum ProductKind {
+  INDIVIDUAL_TICKET
+  FULL_TABLE
+  CAPTAIN_COMMITMENT
+  DONATION
+  FEE_UPSELL
+}
+
+enum ProductTier {
+  STANDARD
+  VIP
+  VVIP
+}
+
+enum OrderStatus {
+  PENDING           // Stripe payment in progress
+  AWAITING_PAYMENT  // Admin-created, waiting for user to pay
+  COMPLETED         // Payment successful
+  REFUNDED          // Full refund processed
+  CANCELLED         // Order cancelled (no refund)
+  EXPIRED           // Admin-created payment link expired
+}
+
+enum PromoDiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum WaitlistStatus {
+  WAITING
+  CONVERTED
+  EXPIRED
+  CANCELLED
+}
+
+enum ActivityAction {
+  // Guest actions
+  GUEST_ADDED
+  GUEST_REMOVED
+  GUEST_UPDATED
+  GUEST_REASSIGNED
+  GUEST_CHECKED_IN
+  TICKET_TRANSFERRED
+  
+  // Table actions
+  TABLE_CREATED
+  TABLE_UPDATED
+  TABLE_DELETED
+  TABLE_ROLE_ADDED
+  TABLE_ROLE_REMOVED
+  
+  // Order actions
+  ORDER_CREATED
+  ORDER_COMPLETED
+  ORDER_REFUNDED
+  ORDER_CANCELLED
+  ORDER_INVITED        // Admin sent payment invitation
+  ORDER_EXPIRED        // Payment link expired
+  
+  // User actions
+  USER_CREATED
+  USER_UPDATED
+  USER_LOGIN
+  
+  // Admin actions
+  ADMIN_OVERRIDE
+  SHEETS_SYNC
+  WAITLIST_CONVERTED
+}
+
+enum EntityType {
+  USER
+  TABLE
+  GUEST_ASSIGNMENT
+  ORDER
+  EVENT
+  ORGANIZATION
+  WAITLIST_ENTRY
+}
+
+// =============================================================================
+// ORGANIZATION & USER MODELS
+// =============================================================================
+
+model Organization {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  stripe_account_id String?  // One Stripe account per org
+  
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+  
+  // Relations
+  events            Event[]
+  admins            OrganizationAdmin[]
+  tags              Tag[]
+  activity_logs     ActivityLog[]
+  
+  @@index([slug])
+}
+
+model OrganizationAdmin {
+  id              String       @id @default(cuid())
+  user_id         String
+  organization_id String
+  
+  created_at      DateTime     @default(now())
+  
+  // Relations
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  
+  @@unique([user_id, organization_id])
+  @@index([organization_id])
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  first_name      String?
+  last_name       String?
+  phone           String?
+  
+  // Auth & permissions
+  supabase_auth_id String?  @unique  // Links to Supabase Auth
+  is_super_admin   Boolean  @default(false)
+  
+  // Communication preferences
+  sms_opt_in      Boolean   @default(false)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  // Relations
+  organization_admins OrganizationAdmin[]
+  table_roles         TableUserRole[]
+  orders              Order[]
+  guest_assignments   GuestAssignment[]
+  owned_tables        Table[]            @relation("TableOwner")
+  activity_logs       ActivityLog[]      @relation("ActivityActor")
+  waitlist_entries    WaitlistEntry[]
+  
+  @@index([email])
+  @@index([supabase_auth_id])
+}
+
+// =============================================================================
+// EVENT MODEL
+// =============================================================================
+
+model Event {
+  id                String       @id @default(cuid())
+  organization_id   String
+  
+  name              String
+  slug              String
+  description       String?
+  
+  event_date        DateTime
+  venue_name        String?
+  venue_address     String?
+  
+  // Google Sheets integration (one sheet auth per event)
+  google_sheets_id  String?
+  google_sheet_name String?
+  
+  // Status
+  is_active         Boolean      @default(true)
+  tickets_on_sale   Boolean      @default(false)
+  
+  created_at        DateTime     @default(now())
+  updated_at        DateTime     @updatedAt
+  
+  // Relations
+  organization      Organization @relation(fields: [organization_id], references: [id], onDelete: Restrict)
+  tables            Table[]
+  products          Product[]
+  orders            Order[]
+  guest_assignments GuestAssignment[]
+  promo_codes       PromoCode[]
+  waitlist_entries  WaitlistEntry[]
+  sheet_row_mappings SheetRowMapping[]
+  activity_logs     ActivityLog[]
+  
+  @@unique([organization_id, slug])
+  @@index([organization_id])
+  @@index([event_date])
+}
+
+// =============================================================================
+// TABLE MODEL
+// =============================================================================
+
+model Table {
+  id                   String             @id @default(cuid())
+  event_id             String
+  primary_owner_id     String
+  
+  // Public info
+  name                 String             // Public table name (e.g., "Scott's 50th Bash Table")
+  slug                 String             // URL slug (e.g., "scotts-bash")
+  welcome_message      String?
+  
+  // Admin-only info
+  internal_name        String?            // Private name for admin reference
+  table_number         String?            // Physical table number at venue
+  
+  // Table configuration
+  type                 TableType          @default(CAPTAIN_PAYG)
+  status               TableStatus        @default(ACTIVE)
+  capacity             Int                @default(10)
+  
+  // ==========================================================================
+  // PRICING
+  // ==========================================================================
+  // For admin-created tables with custom pricing:
+  // - custom_total_price_cents: The total table price (e.g., $5,000 sponsor table)
+  // - seat_price_cents: Per-seat price for guests. If null and custom_total is set,
+  //   derive as custom_total / capacity. Set to 0 explicitly for "claim free" tables.
+  //
+  // Examples:
+  // - Sponsor table ($5,000, seats free): custom_total=500000, seat_price=0
+  // - Comp table ($0): custom_total=0, seat_price=0
+  // - Reserved captain table ($600 total): custom_total=60000, seat_price=null (derived: $60)
+  // - Regular captain table: custom_total=null, seat_price=null (use Product price)
+  // ==========================================================================
+  custom_total_price_cents  Int?
+  seat_price_cents          Int?
+  
+  // Offline payment tracking (for prepaid tables paid outside Stripe)
+  payment_status       TablePaymentStatus @default(NOT_APPLICABLE)
+  payment_notes        String?            // "Check #1234 received 10/15", "Invoice #INV-2025-001"
+  
+  created_at           DateTime           @default(now())
+  updated_at           DateTime           @updatedAt
+  
+  // Relations
+  event                Event              @relation(fields: [event_id], references: [id], onDelete: Restrict)
+  primary_owner        User               @relation("TableOwner", fields: [primary_owner_id], references: [id], onDelete: Restrict)
+  
+  user_roles           TableUserRole[]
+  guest_assignments    GuestAssignment[]
+  orders               Order[]
+  tags                 TableTag[]
+  waitlist_entries     WaitlistEntry[]
+  
+  @@unique([event_id, slug])
+  @@index([event_id])
+  @@index([primary_owner_id])
+  @@index([slug])
+  @@index([status])
+}
+
+model TableUserRole {
+  id          String    @id @default(cuid())
+  table_id    String
+  user_id     String
+  role        TableRole
+  
+  created_at  DateTime  @default(now())
+  
+  // Relations
+  table       Table     @relation(fields: [table_id], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([table_id, user_id, role])
+  @@index([table_id])
+  @@index([user_id])
+}
+
+// =============================================================================
+// PRODUCT MODEL
+// =============================================================================
+
+model Product {
+  id            String      @id @default(cuid())
+  event_id      String
+  
+  name          String      // e.g., "Standard Individual Ticket", "VIP Full Table"
+  description   String?
+  
+  kind          ProductKind
+  tier          ProductTier @default(STANDARD)
+  
+  price_cents   Int         // Price in cents
+  is_active     Boolean     @default(true)
+  
+  // Stripe mapping
+  stripe_price_id   String?
+  stripe_product_id String?
+  
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @updatedAt
+  
+  // Relations
+  event         Event       @relation(fields: [event_id], references: [id], onDelete: Restrict)
+  orders        Order[]
+  
+  @@unique([event_id, name]) 
+  @@index([event_id])
+  @@index([event_id, kind, tier])
+}
+
+// =============================================================================
+// ORDER MODEL
+// =============================================================================
+
+model Order {
+  id                     String      @id @default(cuid())
+  event_id               String
+  user_id                String      // Buyer (stays constant even after ticket transfer)
+  product_id             String
+  table_id               String?     // Original table at time of purchase (null for unassigned)
+  promo_code_id          String?
+  
+  // Order details
+  quantity               Int         @default(1)  // Number of seats purchased
+  amount_cents           Int                      // Total amount charged
+  discount_cents         Int         @default(0)  // Discount from promo code
+  
+  status                 OrderStatus @default(PENDING)
+  
+  // Stripe tracking (for online payments)
+  stripe_payment_intent_id String?   @unique
+  stripe_charge_id         String?
+  
+  // ==========================================================================
+  // ADMIN-CREATED ORDERS (Reserved Ticket Invitations)
+  // ==========================================================================
+  // When admin creates a reserved ticket for someone:
+  // - is_admin_created = true
+  // - status = AWAITING_PAYMENT
+  // - invited_email = recipient's email (user may not exist yet)
+  // - custom_price_cents = override price (or null to use product price)
+  // - payment_link_token = unique token for /pay/{token} URL
+  // - payment_link_expires = expiration datetime (default: 7 days)
+  //
+  // Flow:
+  // 1. Admin creates order with above fields
+  // 2. System emails invited_email with payment link
+  // 3. User clicks link, pays via Stripe
+  // 4. Webhook updates status to COMPLETED, creates GuestAssignment
+  // 5. If expired, status changes to EXPIRED
+  // ==========================================================================
+  is_admin_created       Boolean     @default(false)
+  invited_email          String?     // Email for payment invitation (if user doesn't exist)
+  custom_price_cents     Int?        // Override product price for this order
+  payment_link_token     String?     @unique  // Unique token for payment URL
+  payment_link_expires   DateTime?   // Expiration (default 7 days from creation)
+  
+  // Metadata
+  notes                  String?     // Admin notes
+  
+  created_at             DateTime    @default(now())
+  updated_at             DateTime    @updatedAt
+  
+  // Relations
+  event                  Event       @relation(fields: [event_id], references: [id], onDelete: Restrict)
+  user                   User        @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  product                Product     @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  table                  Table?      @relation(fields: [table_id], references: [id], onDelete: SetNull)
+  promo_code             PromoCode?  @relation(fields: [promo_code_id], references: [id], onDelete: SetNull)
+  
+  guest_assignments      GuestAssignment[]
+  
+  @@index([event_id])
+  @@index([user_id])
+  @@index([table_id])
+  @@index([stripe_payment_intent_id])
+  @@index([payment_link_token])
+  @@index([status])
+}
+
+// =============================================================================
+// GUEST ASSIGNMENT MODEL
+// =============================================================================
+
+model GuestAssignment {
+  id              String    @id @default(cuid())
+  event_id        String
+  table_id        String?   // Nullable: unassigned guests have no table yet
+  user_id         String    // The person occupying this seat
+  order_id        String    // The order that "owns" this seat
+  
+  // Guest details (can differ from User record for event-specific info)
+  display_name    String?   // Override name for this event
+  
+  // Dietary restrictions stored as JSON for flexibility
+  // Example: { "restrictions": ["vegetarian", "gluten-free"], "notes": "severe nut allergy" }
+  dietary_restrictions Json?
+  
+  // Event-specific fields
+  bidder_number   String?   // Auction bidder number (likely synced from Sheets)
+  
+  // Check-in
+  checked_in_at   DateTime?
+  qr_code_token   String?   @unique  // For QR code generation (globally unique)
+  
+  // Sheets sync
+  auction_registered Boolean @default(false)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  // Relations
+  event           Event     @relation(fields: [event_id], references: [id], onDelete: Restrict)
+  table           Table?    @relation(fields: [table_id], references: [id], onDelete: SetNull)
+  user            User      @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  order           Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  
+  tags            GuestTag[]
+  
+  @@index([event_id])
+  @@index([table_id])
+  @@index([user_id])
+  @@index([order_id])
+  @@index([qr_code_token])
+  @@index([event_id, table_id])  // Composite index for common query
+}
+
+// =============================================================================
+// TAGGING SYSTEM
+// =============================================================================
+
+model Tag {
+  id              String       @id @default(cuid())
+  organization_id String
+  
+  name            String       // e.g., "VIP", "Sponsor", "Comp", "Board Member"
+  slug            String       // URL-safe version
+  color           String?      // Hex color for UI display
+  description     String?
+  
+  created_at      DateTime     @default(now())
+  
+  // Relations
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  table_tags      TableTag[]
+  guest_tags      GuestTag[]
+  
+  @@unique([organization_id, slug])
+  @@index([organization_id])
+}
+
+model TableTag {
+  id          String   @id @default(cuid())
+  table_id    String
+  tag_id      String
+  
+  created_at  DateTime @default(now())
+  
+  // Relations
+  table       Table    @relation(fields: [table_id], references: [id], onDelete: Cascade)
+  tag         Tag      @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+  
+  @@unique([table_id, tag_id])
+  @@index([table_id])
+  @@index([tag_id])
+}
+
+model GuestTag {
+  id                  String          @id @default(cuid())
+  guest_assignment_id String
+  tag_id              String
+  
+  created_at          DateTime        @default(now())
+  
+  // Relations
+  guest_assignment    GuestAssignment @relation(fields: [guest_assignment_id], references: [id], onDelete: Cascade)
+  tag                 Tag             @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+  
+  @@unique([guest_assignment_id, tag_id])
+  @@index([guest_assignment_id])
+  @@index([tag_id])
+}
+
+// =============================================================================
+// PROMO CODE MODEL
+// =============================================================================
+
+model PromoCode {
+  id              String            @id @default(cuid())
+  event_id        String
+  
+  code            String            // The actual code users enter
+  description     String?
+  
+  discount_type   PromoDiscountType
+  discount_value  Int               // Percentage (0-100) or cents amount
+  
+  // Usage limits
+  max_uses        Int?              // Null = unlimited
+  current_uses    Int               @default(0)
+  
+  // Validity period
+  valid_from      DateTime          @default(now())
+  valid_until     DateTime?
+  
+  is_active       Boolean           @default(true)
+  
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+  
+  // Relations
+  event           Event             @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  orders          Order[]
+  
+  @@unique([event_id, code])
+  @@index([event_id])
+  @@index([code])
+}
+
+// =============================================================================
+// WAITLIST MODEL
+// =============================================================================
+
+model WaitlistEntry {
+  id          String         @id @default(cuid())
+  event_id    String
+  table_id    String?        // Null = general event waitlist; Set = specific table waitlist
+  user_id     String?        // Nullable: null if anonymous signup
+  
+  // For anonymous signups (user_id is null)
+  email       String?        // Required if user_id is null
+  
+  // CONSTRAINT: Either user_id OR email must be set (enforced in application layer)
+  
+  status      WaitlistStatus @default(WAITING)
+  
+  // Additional context
+  notes       String?        // User's note (e.g., "Prefer to sit with John Smith")
+  quantity    Int            @default(1)  // How many seats they want
+  
+  // Conversion tracking
+  converted_order_id String? // If they got a ticket, link to the order
+  
+  created_at  DateTime       @default(now())
+  updated_at  DateTime       @updatedAt
+  
+  // Relations
+  event       Event          @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  table       Table?         @relation(fields: [table_id], references: [id], onDelete: SetNull)
+  user        User?          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  
+  @@index([event_id])
+  @@index([table_id])
+  @@index([user_id])
+  @@index([email])
+  @@index([status])
+}
+
+// =============================================================================
+// STRIPE EVENT LOG (for webhook idempotency)
+// =============================================================================
+
+model StripeEventLog {
+  id                String   @id @default(cuid())
+  stripe_event_id   String   @unique  // Stripe's event ID
+  event_type        String             // e.g., "payment_intent.succeeded"
+  
+  payload           Json               // Full webhook payload
+  
+  processed         Boolean  @default(false)
+  processed_at      DateTime?
+  error_message     String?
+  
+  created_at        DateTime @default(now())
+  
+  @@index([stripe_event_id])
+  @@index([event_type])
+  @@index([processed])
+}
+
+// =============================================================================
+// SHEETS SYNC MAPPING
+// =============================================================================
+// NOTE: This model uses entity_type + entity_id for polymorphic references.
+// Relations are NOT defined here; resolve entity references in application code.
+// Example: if entity_type = TABLE, query Table model with entity_id
+// =============================================================================
+
+model SheetRowMapping {
+  id              String     @id @default(cuid())
+  event_id        String
+  
+  // Polymorphic entity reference (resolved in application code)
+  entity_type     EntityType
+  entity_id       String
+  
+  // Sheets location
+  sheet_name      String     // Tab name
+  row_number      Int
+  
+  // Sync tracking
+  last_synced_at  DateTime?
+  sync_hash       String?    // Hash of row data to detect changes
+  
+  created_at      DateTime   @default(now())
+  updated_at      DateTime   @updatedAt
+  
+  // Relations
+  event           Event      @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  
+  @@unique([event_id, entity_type, entity_id])
+  @@index([event_id])
+  @@index([entity_type, entity_id])
+}
+
+// =============================================================================
+// ACTIVITY LOG (audit trail)
+// =============================================================================
+
+model ActivityLog {
+  id              String         @id @default(cuid())
+  organization_id String
+  event_id        String?        // Null for org-level actions
+  
+  // Who did it
+  actor_id        String?        // Null for system actions
+  
+  // What happened
+  action          ActivityAction
+  
+  // What was affected (polymorphic, resolved in application code)
+  entity_type     EntityType
+  entity_id       String
+  
+  // Context
+  metadata        Json?          // Old values, new values, additional context
+  ip_address      String?
+  user_agent      String?
+  
+  created_at      DateTime       @default(now())
+  
+  // Relations
+  organization    Organization   @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  event           Event?         @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  actor           User?          @relation("ActivityActor", fields: [actor_id], references: [id], onDelete: SetNull)
+  
+  @@index([organization_id])
+  @@index([event_id])
+  @@index([actor_id])
+  @@index([entity_type, entity_id])
+  @@index([action])
+  @@index([created_at])
 }
