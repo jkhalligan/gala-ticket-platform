@@ -121,11 +121,34 @@ export default function InvitationsPage() {
         setExpirationDays("7");
         await fetchInvitations();
       } else {
-        const error = await response.json();
-        console.error("Failed to create invitation:", error);
+        // Handle API error with robust error parsing
+        let errorMessage = "Unknown error";
+        try {
+          const errorBody = await response.text();
+          if (errorBody && errorBody.trim()) {
+            const parsedError = JSON.parse(errorBody);
+            if (parsedError.error && typeof parsedError.error === "string") {
+              errorMessage = parsedError.error;
+            } else if (parsedError.message && typeof parsedError.message === "string") {
+              errorMessage = parsedError.message;
+            } else if (Object.keys(parsedError).length === 0) {
+              // Empty object {}
+              errorMessage = "API Error: Invitation creation failed. Check the server logs for missing environment variables (e.g., emailer setup).";
+            } else {
+              errorMessage = JSON.stringify(parsedError);
+            }
+          } else {
+            // Empty response body
+            errorMessage = "API Error: Invitation creation failed. Check the server logs for missing environment variables (e.g., emailer setup).";
+          }
+        } catch {
+          // JSON parsing failed - response might be plain text or malformed
+          errorMessage = "API Error: Invitation creation failed. Check the server logs for missing environment variables (e.g., emailer setup).";
+        }
+        console.error("Failed to create invitation:", errorMessage);
       }
     } catch (error) {
-      console.error("Failed to create invitation:", error);
+      console.error("Failed to create invitation:", error instanceof Error ? error.message : error);
     } finally {
       setIsSubmitting(false);
     }
