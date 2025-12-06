@@ -122,7 +122,7 @@ export default function ActivityPage() {
 
   // Filter state
   const [actionFilter, setActionFilter] = React.useState<string>("all");
-  const [actorFilter, setActorFilter] = React.useState<string>("");
+  const [actorFilter, setActorFilter] = React.useState<string>("all-users");
   const [dateFrom, setDateFrom] = React.useState<string>("");
   const [dateTo, setDateTo] = React.useState<string>("");
 
@@ -185,7 +185,7 @@ export default function ActivityPage() {
     }
 
     // Actor filter
-    if (actorFilter) {
+    if (actorFilter && actorFilter !== "all-users") {
       result = result.filter((log) => log.actorEmail === actorFilter);
     }
 
@@ -207,12 +207,12 @@ export default function ActivityPage() {
 
   const clearFilters = () => {
     setActionFilter("all");
-    setActorFilter("");
+    setActorFilter("all-users");
     setDateFrom("");
     setDateTo("");
   };
 
-  const hasActiveFilters = actionFilter !== "all" || actorFilter || dateFrom || dateTo;
+  const hasActiveFilters = actionFilter !== "all" || actorFilter !== "all-users" || dateFrom || dateTo;
 
   // Column definitions
   const columns: ColumnDef<ActivityLogEntry>[] = [
@@ -392,7 +392,7 @@ export default function ActivityPage() {
                   <SelectValue placeholder="All users" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All users</SelectItem>
+                  <SelectItem value="all-users">All users</SelectItem>
                   {actors.map((actor) => (
                     <SelectItem key={actor.id} value={actor.email}>
                       {actor.name}
