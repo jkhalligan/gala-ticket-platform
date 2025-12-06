@@ -894,22 +894,45 @@ src/
 
 ## Checklist: Phase 6.1 Setup
 
-- [ ] Install dependencies (`clsx`, `tailwind-merge`, `class-variance-authority`, `lucide-react`)
-- [ ] Install Radix UI primitives (as needed)
-- [ ] Create `src/lib/utils.ts` with `cn()` function
-- [ ] Create `components.json` for shadcn CLI
-- [ ] Update `src/app/globals.css` with full theme variables
-- [ ] Create `src/components/ui/` directory
-- [ ] Add initial shadcn components (button, card, at minimum)
-- [ ] Create `src/components/admin/` directory
-- [ ] Create admin layout (`src/app/admin/layout.tsx`)
-- [ ] Create sidebar component
-- [ ] Create header component
-- [ ] Create placeholder dashboard page
-- [ ] Test admin route protection (redirect non-admins)
-- [ ] Verify dark mode works
+- [x] Install dependencies (`clsx`, `tailwind-merge`, `class-variance-authority`, `lucide-react`)
+- [x] Install Radix UI primitives (as needed)
+- [x] Create `src/lib/utils.ts` with `cn()` function
+- [x] Create `components.json` for shadcn CLI
+- [x] Update `src/app/globals.css` with full theme variables
+- [x] Create `src/components/ui/` directory
+- [x] Add initial shadcn components (button, card, at minimum)
+- [x] Create `src/components/admin/` directory
+- [x] Create admin layout (`src/app/admin/layout.tsx`)
+- [x] Create sidebar component
+- [x] Create header component
+- [x] Create placeholder dashboard page
+- [x] Test admin route protection (redirect non-admins)
+- [x] Verify dark mode works
+
+---
+
+## Phase 6 Completion Summary
+
+The Admin Dashboard is structurally complete. All 9 administrative routes (Dashboard Overview, Tables, Guests, Orders, Invitations, Sync, Activity Log, Waitlist) are implemented using the new shadcn/ui and DataTable components. This phase has been merged into the main branch, pending final styling and bug fixes.
+
+### Phase 6 Troubleshooting Appendix
+
+**Major Issues Encountered:**
+
+1. **Dependency Errors**: We encountered missing module errors for core UI packages (`clsx`, `lucide-react`, `tailwind-merge`, and `date-fns`).
+   - **Resolution**: All were fixed by explicit `npm install` commands when they failed to resolve automatically, often requiring a manual restart and cache clear.
+
+2. **Prisma Client Generation**: The build failed repeatedly due to `Cannot find module '.prisma/client/default'`.
+   - **Resolution**: This was resolved by ensuring the `DATABASE_URL` was correctly loaded and executing a clean `npx prisma generate` command.
+
+3. **UI Component Constraint**: The Activity Log page failed to load due to the `Select.Item` component rejecting an empty string value (`""`).
+   - **Resolution**: The value for the 'All users' filter was changed to the non-empty string `'all-users'`.
+
+4. **Known Pending Backend Issue**: The invitations creation form on `/admin/invitations` throws a console error (`Failed to create invitation: {}`) because the backend API route is failing silently (likely due to missing external service configuration, like an emailer).
+   - **Resolution**: Client-side error handling was improved, but the backend API fix is deferred to Phase 7.
 
 ---
 
 *Document created: December 2025*
 *Phase 6.1 Target: Setup complete, layout functional*
+*Phase 6 Completion: December 2025*
