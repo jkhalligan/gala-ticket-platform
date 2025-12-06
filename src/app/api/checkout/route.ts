@@ -1,191 +1,210 @@
+// src/app/api/checkout/route.ts
 // =============================================================================
-// Checkout API Route
+// Checkout API - Create PaymentIntent or Complete $0 Orders
 // =============================================================================
-// POST /api/checkout
-// Creates PaymentIntent for paid orders or directly creates Order for $0 flows
+// Phase 5 Update: Added reference_code, organization_id, tier on table/guest creation
 // =============================================================================
-
-export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import { createPaymentIntent, formatCentsToDisplay } from "@/lib/stripe";
-import {
-  CheckoutRequestSchema,
-  CheckoutResponse,
-  CheckoutRequest,
-  PriceCalculation,
-  PromoCodeResult,
-} from "@/lib/validation/checkout";
+import { createPaymentIntent } from "@/lib/stripe";
+import { CheckoutRequestSchema } from "@/lib/validation/checkout";
 import { randomBytes } from "crypto";
+import {
+  generateTableReferenceCode,
+  generateGuestReferenceCode,
+  getProductTier,
+} from "@/lib/reference-codes";
 
 // =============================================================================
 // POST /api/checkout
 // =============================================================================
 
-export async function POST(req: NextRequest): Promise<NextResponse<CheckoutResponse>> {
+export async function POST(request: NextRequest) {
   try {
-    // 1. Parse and validate request body
-    const body = await req.json();
-    const parseResult = CheckoutRequestSchema.safeParse(body);
+    // 1. Get current user (optional for guest checkout)
+    const currentUser = await getCurrentUser();
 
-    if (!parseResult.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Validation failed",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 400 }
-      );
-    }
+    // 2. Parse and validate request
+    const body = await request.json();
+    const data = CheckoutRequestSchema.parse(body);
 
-    const data: CheckoutRequest = parseResult.data;
-
-    // 2. Get or create user
-    const user = await getOrCreateUser(data.buyer_info);
-    if (!user) {
-      return NextResponse.json(
-        { success: false, error: "Failed to identify user", code: "USER_ERROR" },
-        { status: 400 }
-      );
-    }
-
-    // 3. Validate product
+    // 3. Verify product exists and is active
     const product = await prisma.product.findUnique({
       where: { id: data.product_id },
-      include: { event: true },
+      include: {
+        event: {
+          select: {
+            id: true,
+            organization_id: true,
+            tickets_on_sale: true,
+          },
+        },
+      },
     });
 
     if (!product) {
-      return NextResponse.json(
-        { success: false, error: "Product not found", code: "PRODUCT_NOT_FOUND" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
 
     if (!product.is_active) {
-      return NextResponse.json(
-        { success: false, error: "Product is not available", code: "PRODUCT_INACTIVE" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Product is not available" }, { status: 400 });
     }
 
     if (product.event_id !== data.event_id) {
       return NextResponse.json(
-        { success: false, error: "Product does not belong to this event", code: "EVENT_MISMATCH" },
+        { error: "Product does not belong to this event" },
         { status: 400 }
       );
     }
 
-    // 4. Validate table for individual_at_table flow
-    let targetTable: { id: string; capacity: number; name: string } | null = null;
-    if (data.order_flow === "individual_at_table") {
-      targetTable = await validateJoinTable(data.table_id!, data.event_id, data.quantity);
-      if (!targetTable) {
-        return NextResponse.json(
-          { success: false, error: "Table not found or has no available seats", code: "TABLE_ERROR" },
-          { status: 400 }
-        );
+    // 4. Find or create buyer user
+    let buyer = currentUser;
+    if (!buyer) {
+      buyer = await prisma.user.findUnique({
+        where: { email: data.buyer_info.email.toLowerCase() },
+      });
+
+      if (!buyer) {
+        buyer = await prisma.user.create({
+          data: {
+            email: data.buyer_info.email.toLowerCase(),
+            first_name: data.buyer_info.first_name,
+            last_name: data.buyer_info.last_name,
+            phone: data.buyer_info.phone,
+          },
+        });
       }
     }
 
-    // 5. Calculate price
-    const priceCalc = await calculatePrice({
-      product,
-      quantity: data.quantity,
-      promo_code: data.promo_code,
-      event_id: data.event_id,
-      table_id: data.table_id,
-    });
+    // 5. Validate table if joining existing
+    let tableId = data.table_id;
+    if (data.order_flow === "individual_at_table" && tableId) {
+      const table = await prisma.table.findUnique({
+        where: { id: tableId },
+      });
 
-    if ("error" in priceCalc) {
-      return NextResponse.json(
-        { success: false, error: priceCalc.error, code: "PRICE_ERROR" },
-        { status: 400 }
-      );
+      if (!table || table.event_id !== data.event_id) {
+        return NextResponse.json({ error: "Invalid table" }, { status: 400 });
+      }
+
+      // Check if table has capacity
+      const [completedOrders, assignedGuests] = await Promise.all([
+        prisma.order.aggregate({
+          where: { table_id: tableId, status: "COMPLETED" },
+          _sum: { quantity: true },
+        }),
+        prisma.guestAssignment.count({
+          where: { table_id: tableId },
+        }),
+      ]);
+
+      const totalPurchased = completedOrders._sum.quantity || 0;
+      if (totalPurchased >= table.capacity) {
+        return NextResponse.json({ error: "Table is full" }, { status: 400 });
+      }
     }
 
-    // 6. Handle $0 orders (captain_commitment) directly
-    if (priceCalc.total_cents === 0) {
+    // 6. Validate promo code if provided
+    let promoValidation = { valid: true, promo_code_id: undefined as string | undefined, discount_cents: 0 };
+    if (data.promo_code) {
+      const subtotal = product.price_cents * data.quantity;
+      promoValidation = await validatePromoCode(data.promo_code, data.event_id, subtotal);
+      
+      if (!promoValidation.valid) {
+        return NextResponse.json({ error: promoValidation.error }, { status: 400 });
+      }
+    }
+
+    // 7. Calculate final amount
+    const subtotalCents = product.price_cents * data.quantity;
+    const discountCents = promoValidation.discount_cents;
+    const totalCents = Math.max(0, subtotalCents - discountCents);
+
+    // 8. Handle $0 orders (captain commitment or fully discounted)
+    if (totalCents === 0) {
       const result = await createZeroDollarOrder({
-        user_id: user.id,
+        user_id: buyer.id,
         event_id: data.event_id,
+        organization_id: product.event.organization_id,
         product_id: data.product_id,
+        product_tier: product.tier,
         quantity: data.quantity,
         order_flow: data.order_flow,
-        table_id: targetTable?.id,
+        table_id: tableId,
         table_info: data.table_info,
-        promo_code_id: priceCalc.promo_code_id,
-        discount_cents: priceCalc.discount_cents,
+        promo_code_id: promoValidation.promo_code_id,
+        discount_cents: discountCents,
       });
 
       return NextResponse.json({
         success: true,
+        requires_payment: false,
         order_id: result.order_id,
-        amount_cents: 0,
-        original_amount_cents: priceCalc.subtotal_cents,
-        discount_cents: priceCalc.discount_cents,
-        promo_code_applied: data.promo_code,
+        table_id: result.table_id,
       });
     }
 
-    // 7. Create PaymentIntent for paid orders
-    const paymentResult = await createPaymentIntent({
-      amount_cents: priceCalc.total_cents,
-      metadata: {
-        event_id: data.event_id,
-        user_id: user.id,
-        product_id: data.product_id,
-        quantity: data.quantity,
-        table_id: targetTable?.id,
-        promo_code_id: priceCalc.promo_code_id,
-        order_flow: data.order_flow,
-        // Include table info for full_table purchases (used by webhook to create table)
-        table_name: data.table_info?.name,
-        table_internal_name: data.table_info?.internal_name,
-      },
-      receipt_email: data.buyer_info.email,
-      description: `Pink Gala: ${product.name} x${data.quantity}`,
-    });
-
-    // 8. Create pending order record
-    await prisma.order.create({
+    // 9. Create pending order
+    const order = await prisma.order.create({
       data: {
         event_id: data.event_id,
-        user_id: user.id,
+        user_id: buyer.id,
         product_id: data.product_id,
-        table_id: targetTable?.id,
-        promo_code_id: priceCalc.promo_code_id,
+        table_id: tableId,
+        promo_code_id: promoValidation.promo_code_id,
         quantity: data.quantity,
-        amount_cents: priceCalc.total_cents,
-        discount_cents: priceCalc.discount_cents,
+        amount_cents: totalCents,
+        discount_cents: discountCents,
         status: "PENDING",
-        stripe_payment_intent_id: paymentResult.paymentIntentId,
+      },
+    });
+
+    // 10. Create PaymentIntent with metadata for webhook
+    const paymentIntent = await createPaymentIntent({
+      amount: totalCents,
+      currency: "usd",
+      metadata: {
+        order_id: order.id,
+        event_id: data.event_id,
+        user_id: buyer.id,
+        product_id: data.product_id,
+        quantity: data.quantity.toString(),
+        order_flow: data.order_flow,
+        table_id: tableId || "",
+        table_name: data.table_info?.name || "",
+        table_capacity: data.order_flow === "full_table" ? "10" : "",
+        promo_code_id: promoValidation.promo_code_id || "",
+      },
+      receipt_email: buyer.email,
+    });
+
+    // 11. Update order with PaymentIntent ID
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        stripe_payment_intent_id: paymentIntent.id,
       },
     });
 
     return NextResponse.json({
       success: true,
-      payment_intent_id: paymentResult.paymentIntentId,
-      client_secret: paymentResult.clientSecret,
-      amount_cents: priceCalc.total_cents,
-      original_amount_cents: priceCalc.subtotal_cents,
-      discount_cents: priceCalc.discount_cents,
-      promo_code_applied: data.promo_code,
+      requires_payment: true,
+      order_id: order.id,
+      client_secret: paymentIntent.client_secret,
+      amount_cents: totalCents,
+      discount_cents: discountCents,
     });
 
   } catch (error) {
     console.error("Checkout error:", error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Internal server error",
-        code: "INTERNAL_ERROR",
-      },
-      { status: 500 }
-    );
+
+    if (error instanceof Error && error.name === "ZodError") {
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    }
+
+    return NextResponse.json({ error: "Checkout failed" }, { status: 500 });
   }
 }
 
@@ -194,131 +213,20 @@ export async function POST(req: NextRequest): Promise<NextResponse<CheckoutRespo
 // =============================================================================
 
 /**
- * Get existing user or create a new one from buyer info
- */
-async function getOrCreateUser(buyerInfo: CheckoutRequest["buyer_info"]) {
-  // First try to get authenticated user
-  const currentUser = await getCurrentUser();
-  if (currentUser) {
-    return currentUser;
-  }
-
-  // Look for existing user by email
-  let user = await prisma.user.findUnique({
-    where: { email: buyerInfo.email.toLowerCase() },
-  });
-
-  if (!user) {
-    // Create new user
-    user = await prisma.user.create({
-      data: {
-        email: buyerInfo.email.toLowerCase(),
-        first_name: buyerInfo.first_name,
-        last_name: buyerInfo.last_name,
-        phone: buyerInfo.phone,
-      },
-    });
-  }
-
-  return user;
-}
-
-/**
- * Validate that a table exists and has capacity for the requested seats
- */
-async function validateJoinTable(
-  tableId: string,
-  eventId: string,
-  requestedSeats: number
-): Promise<{ id: string; capacity: number; name: string } | null> {
-  const table = await prisma.table.findUnique({
-    where: { id: tableId },
-    include: {
-      orders: {
-        where: { status: "COMPLETED" },
-        select: { quantity: true },
-      },
-    },
-  });
-
-  if (!table || table.event_id !== eventId || table.status !== "ACTIVE") {
-    return null;
-  }
-
-  // Calculate available seats
-  const purchasedSeats = table.orders.reduce((sum, o) => sum + o.quantity, 0);
-  const availableSeats = table.capacity - purchasedSeats;
-
-  if (availableSeats < requestedSeats) {
-    return null;
-  }
-
-  return { id: table.id, capacity: table.capacity, name: table.name };
-}
-
-/**
- * Calculate total price including promo code discount
- */
-async function calculatePrice(params: {
-  product: { price_cents: number; kind: string };
-  quantity: number;
-  promo_code?: string;
-  event_id: string;
-  table_id?: string;
-}): Promise<PriceCalculation | { error: string }> {
-  const { product, quantity, promo_code, event_id, table_id } = params;
-
-  // Get base price (might be overridden for tables with custom pricing)
-  let unitPrice = product.price_cents;
-
-  // If joining a table, check for custom seat pricing
-  if (table_id) {
-    const table = await prisma.table.findUnique({
-      where: { id: table_id },
-      select: { seat_price_cents: true, custom_total_price_cents: true, capacity: true },
-    });
-
-    if (table?.seat_price_cents !== null && table?.seat_price_cents !== undefined) {
-      unitPrice = table.seat_price_cents;
-    } else if (table?.custom_total_price_cents !== null && table?.custom_total_price_cents !== undefined && table.capacity > 0) {
-      unitPrice = Math.round(table.custom_total_price_cents / table.capacity);
-    }
-  }
-
-  const subtotal = unitPrice * quantity;
-  let discountCents = 0;
-  let promoCodeId: string | undefined;
-
-  // Validate and apply promo code
-  if (promo_code) {
-    const promoResult = await validatePromoCode(event_id, promo_code, subtotal);
-    if (!promoResult.valid) {
-      return { error: promoResult.error || "Invalid promo code" };
-    }
-    discountCents = promoResult.discount_cents || 0;
-    promoCodeId = promoResult.promo_code_id;
-  }
-
-  const total = Math.max(0, subtotal - discountCents);
-
-  return {
-    product_price_cents: unitPrice,
-    quantity,
-    subtotal_cents: subtotal,
-    discount_cents: discountCents,
-    total_cents: total,
-    promo_code_id: promoCodeId,
-  };
-}
-
-/**
- * Validate promo code and calculate discount
+ * Validate a promo code
  */
 async function validatePromoCode(
-  eventId: string,
   code: string,
+  eventId: string,
   subtotalCents: number
-): Promise<PromoCodeResult> {
+): Promise<{
+  valid: boolean;
+  error?: string;
+  promo_code_id?: string;
+  discount_cents: number;
+  discount_type?: string;
+  discount_value?: number;
+}> {
   const promoCode = await prisma.promoCode.findUnique({
     where: {
       event_id_code: {
@@ -329,24 +237,25 @@ async function validatePromoCode(
   });
 
   if (!promoCode) {
-    return { valid: false, error: "Promo code not found" };
+    return { valid: false, error: "Invalid promo code", discount_cents: 0 };
   }
 
   if (!promoCode.is_active) {
-    return { valid: false, error: "Promo code is no longer active" };
+    return { valid: false, error: "Promo code is no longer active", discount_cents: 0 };
   }
 
   const now = new Date();
+
   if (promoCode.valid_from > now) {
-    return { valid: false, error: "Promo code is not yet valid" };
+    return { valid: false, error: "Promo code is not yet valid", discount_cents: 0 };
   }
 
   if (promoCode.valid_until && promoCode.valid_until < now) {
-    return { valid: false, error: "Promo code has expired" };
+    return { valid: false, error: "Promo code has expired", discount_cents: 0 };
   }
 
   if (promoCode.max_uses && promoCode.current_uses >= promoCode.max_uses) {
-    return { valid: false, error: "Promo code has reached its usage limit" };
+    return { valid: false, error: "Promo code has reached its usage limit", discount_cents: 0 };
   }
 
   // Calculate discount
@@ -369,11 +278,14 @@ async function validatePromoCode(
 
 /**
  * Create a $0 order (captain commitment or fully discounted)
+ * Phase 5 Update: Added reference codes and tier
  */
 async function createZeroDollarOrder(params: {
   user_id: string;
   event_id: string;
+  organization_id: string;
   product_id: string;
+  product_tier: string;
   quantity: number;
   order_flow: string;
   table_id?: string;
@@ -384,7 +296,9 @@ async function createZeroDollarOrder(params: {
   const {
     user_id,
     event_id,
+    organization_id,
     product_id,
+    product_tier,
     quantity,
     order_flow,
     table_id,
@@ -399,6 +313,9 @@ async function createZeroDollarOrder(params: {
   if (order_flow === "captain_commitment" && table_info) {
     const slug = generateTableSlug(table_info.name);
     
+    // Phase 5: Generate reference code for table
+    const tableReferenceCode = await generateTableReferenceCode(event_id);
+
     const newTable = await prisma.table.create({
       data: {
         event_id,
@@ -409,6 +326,7 @@ async function createZeroDollarOrder(params: {
         type: "CAPTAIN_PAYG",
         capacity: 10, // Default capacity
         status: "ACTIVE",
+        reference_code: tableReferenceCode,  // Phase 5
       },
     });
 
@@ -418,6 +336,23 @@ async function createZeroDollarOrder(params: {
         table_id: newTable.id,
         user_id: user_id,
         role: "CAPTAIN",
+      },
+    });
+
+    // Log table creation
+    await prisma.activityLog.create({
+      data: {
+        organization_id,
+        event_id,
+        actor_id: user_id,
+        action: "TABLE_CREATED",
+        entity_type: "TABLE",
+        entity_id: newTable.id,
+        metadata: {
+          table_name: table_info.name,
+          type: "CAPTAIN_PAYG",
+          reference_code: tableReferenceCode,
+        },
       },
     });
 
@@ -439,13 +374,19 @@ async function createZeroDollarOrder(params: {
     },
   });
 
+  // Phase 5: Generate reference code for guest assignment
+  const guestReferenceCode = await generateGuestReferenceCode(organization_id);
+
   // Create guest assignment for the captain/buyer
   await prisma.guestAssignment.create({
     data: {
       event_id,
+      organization_id,  // Phase 5
       table_id: finalTableId,
       user_id,
       order_id: order.id,
+      tier: product_tier as any,  // Phase 5
+      reference_code: guestReferenceCode,  // Phase 5
     },
   });
 
@@ -457,29 +398,23 @@ async function createZeroDollarOrder(params: {
     });
   }
 
-  // Log activity
-  const event = await prisma.event.findUnique({
-    where: { id: event_id },
-    select: { organization_id: true },
-  });
-
-  if (event) {
-    await prisma.activityLog.create({
-      data: {
-        organization_id: event.organization_id,
-        event_id,
-        actor_id: user_id,
-        action: "ORDER_COMPLETED",
-        entity_type: "ORDER",
-        entity_id: order.id,
-        metadata: {
-          order_flow,
-          amount_cents: 0,
-          quantity,
-        },
+  // Log order completion
+  await prisma.activityLog.create({
+    data: {
+      organization_id,
+      event_id,
+      actor_id: user_id,
+      action: "ORDER_COMPLETED",
+      entity_type: "ORDER",
+      entity_id: order.id,
+      metadata: {
+        order_flow,
+        amount_cents: 0,
+        quantity,
+        guest_reference_code: guestReferenceCode,
       },
-    });
-  }
+    },
+  });
 
   return { order_id: order.id, table_id: finalTableId };
 }
@@ -492,7 +427,7 @@ function generateTableSlug(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
-  
+
   const suffix = randomBytes(4).toString("hex");
   return `${base}-${suffix}`;
 }

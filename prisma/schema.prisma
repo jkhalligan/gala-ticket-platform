@@ -140,7 +140,7 @@ model Organization {
   id                String   @id @default(cuid())
   name              String
   slug              String   @unique
-  stripe_account_id String?  // One Stripe account per org
+  stripe_account_id String?
   
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
@@ -150,6 +150,7 @@ model Organization {
   admins            OrganizationAdmin[]
   tags              Tag[]
   activity_logs     ActivityLog[]
+  guest_assignments GuestAssignment[]      // NEW: Backrelation for GuestAssignment.organization_id
   
   @@index([slug])
 }
@@ -252,40 +253,38 @@ model Table {
   primary_owner_id     String
   
   // Public info
-  name                 String             // Public table name (e.g., "Scott's 50th Bash Table")
-  slug                 String             // URL slug (e.g., "scotts-bash")
+  name                 String
+  slug                 String
   welcome_message      String?
   
   // Admin-only info
-  internal_name        String?            // Private name for admin reference
-  table_number         String?            // Physical table number at venue
+  internal_name        String?
+  table_number         String?
   
   // Table configuration
   type                 TableType          @default(CAPTAIN_PAYG)
   status               TableStatus        @default(ACTIVE)
   capacity             Int                @default(10)
-  
+
   // ==========================================================================
   // PRICING
-  // ==========================================================================
-  // For admin-created tables with custom pricing:
-  // - custom_total_price_cents: The total table price (e.g., $5,000 sponsor table)
-  // - seat_price_cents: Per-seat price for guests. If null and custom_total is set,
-  //   derive as custom_total / capacity. Set to 0 explicitly for "claim free" tables.
-  //
-  // Examples:
-  // - Sponsor table ($5,000, seats free): custom_total=500000, seat_price=0
-  // - Comp table ($0): custom_total=0, seat_price=0
-  // - Reserved captain table ($600 total): custom_total=60000, seat_price=null (derived: $60)
-  // - Regular captain table: custom_total=null, seat_price=null (use Product price)
   // ==========================================================================
   custom_total_price_cents  Int?
   seat_price_cents          Int?
   
-  // Offline payment tracking (for prepaid tables paid outside Stripe)
+  // Offline payment tracking
   payment_status       TablePaymentStatus @default(NOT_APPLICABLE)
-  payment_notes        String?            // "Check #1234 received 10/15", "Invoice #INV-2025-001"
+  payment_notes        String?
   
+
+  // ================================================
+  // 📌 NEW FIELD FOR SHEETS SYNC
+  // ================================================
+  // Immutable export reference, format: "25-T001"
+  reference_code       String?            // Sheets sync reference code
+  // ================================================
+  
+
   created_at           DateTime           @default(now())
   updated_at           DateTime           @updatedAt
   
@@ -299,12 +298,16 @@ model Table {
   tags                 TableTag[]
   waitlist_entries     WaitlistEntry[]
   
+
+  // Constraints & Indexes
   @@unique([event_id, slug])
+  @@unique([event_id, reference_code])     // ← NEW UNIQUE CONSTRAINT
   @@index([event_id])
   @@index([primary_owner_id])
   @@index([slug])
   @@index([status])
 }
+
 
 model TableUserRole {
   id          String    @id @default(cuid())
@@ -431,25 +434,29 @@ model Order {
 // =============================================================================
 
 model GuestAssignment {
-  id              String    @id @default(cuid())
+  id              String       @id @default(cuid())
   event_id        String
-  table_id        String?   // Nullable: unassigned guests have no table yet
-  user_id         String    // The person occupying this seat
-  order_id        String    // The order that "owns" this seat
+  organization_id String       // NEW: Denormalized from Event → required for reference_code scoping
+  table_id        String?      // Nullable: unassigned guests have no table yet
+  user_id         String       // The person occupying this seat
+  order_id        String       // The order that "owns" this seat
   
   // Guest details (can differ from User record for event-specific info)
-  display_name    String?   // Override name for this event
+  display_name    String?
   
-  // Dietary restrictions stored as JSON for flexibility
-  // Example: { "restrictions": ["vegetarian", "gluten-free"], "notes": "severe nut allergy" }
+  // Dietary restrictions stored as JSON
   dietary_restrictions Json?
   
+  // Sheets sync fields
+  tier            ProductTier  @default(STANDARD)   // NEW: ticket tier snapshot at purchase
+  reference_code  String?                        // NEW: Format "G0001" (per-organization sequence)
+  
   // Event-specific fields
-  bidder_number   String?   // Auction bidder number (likely synced from Sheets)
+  bidder_number   String?
   
   // Check-in
   checked_in_at   DateTime?
-  qr_code_token   String?   @unique  // For QR code generation (globally unique)
+  qr_code_token   String?   @unique  // Globally unique token for QR code check-in
   
   // Sheets sync
   auction_registered Boolean @default(false)
@@ -458,19 +465,22 @@ model GuestAssignment {
   updated_at      DateTime  @updatedAt
   
   // Relations
-  event           Event     @relation(fields: [event_id], references: [id], onDelete: Restrict)
-  table           Table?    @relation(fields: [table_id], references: [id], onDelete: SetNull)
-  user            User      @relation(fields: [user_id], references: [id], onDelete: Restrict)
-  order           Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  event           Event        @relation(fields: [event_id], references: [id], onDelete: Restrict)
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Restrict) // NEW
+  table           Table?       @relation(fields: [table_id], references: [id], onDelete: SetNull)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  order           Order        @relation(fields: [order_id], references: [id], onDelete: Cascade)
   
   tags            GuestTag[]
   
+  // Indexes & constraints
+  @@unique([organization_id, reference_code])    // NEW: required for Sheets sync
   @@index([event_id])
   @@index([table_id])
   @@index([user_id])
   @@index([order_id])
-  @@index([qr_code_token])
-  @@index([event_id, table_id])  // Composite index for common query
+  @@index([organization_id])                      // NEW
+  @@index([event_id, table_id])                   // Common query pattern
 }
 
 // =============================================================================

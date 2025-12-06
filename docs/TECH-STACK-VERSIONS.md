@@ -12,8 +12,9 @@ This project uses **bleeding-edge versions** of most dependencies. Several are m
 | Package | Version | Notes |
 |---------|---------|-------|
 | Node.js | 25.x | Very new, may have compatibility issues |
-| Next.js | 16.x | App Router only, new features |
-| React | 19.x | New concurrent features |
+| `next` | 16.0.7 | React framework (App Router) |
+| `react` | 19.2.1 | UI library |
+| `react-dom` | 19.2.1 | React DOM renderer |
 | Prisma | 7.x | **Breaking:** Requires driver adapter |
 | Zod | 4.x | API changes from v3 |
 | Tailwind | 4.x | New architecture |

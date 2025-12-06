@@ -1,12 +1,15 @@
 // src/app/api/tables/route.ts
-// GET: List tables with filters
-// POST: Create a new table
+// =============================================================================
+// Tables API - List and Create Tables
+// =============================================================================
+// Phase 5 Update: Added reference_code generation on table creation
+// =============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/auth';
 import { CreateTableSchema, TableFiltersSchema } from '@/lib/validation/tables';
-import { Prisma } from '@prisma/client';
+import { generateTableReferenceCode } from '@/lib/reference-codes';
 
 // =============================================================================
 // GET - List Tables
@@ -19,29 +22,32 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Parse query params
-    const searchParams = Object.fromEntries(request.nextUrl.searchParams);
-    const filters = TableFiltersSchema.parse(searchParams);
+    const { searchParams } = new URL(request.url);
+    const filters = TableFiltersSchema.parse({
+      event_id: searchParams.get('event_id') || undefined,
+      status: searchParams.get('status') || undefined,
+      type: searchParams.get('type') || undefined,
+      primary_owner_id: searchParams.get('primary_owner_id') || undefined,
+      search: searchParams.get('search') || undefined,
+      page: searchParams.get('page') ? parseInt(searchParams.get('page')!) : 1,
+      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : 20,
+    });
 
     // Build where clause
-    const where: Prisma.TableWhereInput = {};
+    const where: any = {};
 
     if (filters.event_id) {
       where.event_id = filters.event_id;
     }
-
     if (filters.status) {
       where.status = filters.status;
     }
-
     if (filters.type) {
       where.type = filters.type;
     }
-
     if (filters.primary_owner_id) {
       where.primary_owner_id = filters.primary_owner_id;
     }
-
     if (filters.search) {
       where.OR = [
         { name: { contains: filters.search, mode: 'insensitive' } },
@@ -50,12 +56,11 @@ export async function GET(request: NextRequest) {
       ];
     }
 
-    // Non-admins can only see tables they have access to
+    // If not admin, only show tables user has access to
     if (!user.isAdmin) {
       where.OR = [
         { primary_owner_id: user.id },
         { user_roles: { some: { user_id: user.id } } },
-        { guest_assignments: { some: { user_id: user.id } } },
       ];
     }
 
@@ -154,6 +159,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Generate reference code for Sheets sync (Phase 5)
+    const referenceCode = await generateTableReferenceCode(data.event_id);
+
     // Create the table
     const table = await prisma.table.create({
       data: {
@@ -169,6 +177,7 @@ export async function POST(request: NextRequest) {
         seat_price_cents: data.seat_price_cents,
         payment_status: data.payment_status || 'NOT_APPLICABLE',
         payment_notes: data.payment_notes,
+        reference_code: referenceCode,  // Phase 5: reference code
       },
       include: {
         primary_owner: {
@@ -207,7 +216,11 @@ export async function POST(request: NextRequest) {
         action: 'TABLE_CREATED',
         entity_type: 'TABLE',
         entity_id: table.id,
-        metadata: { table_name: table.name, table_type: table.type },
+        metadata: { 
+          table_name: table.name, 
+          table_type: table.type,
+          reference_code: referenceCode,
+        },
       },
     });
 

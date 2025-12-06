@@ -1,74 +1,64 @@
 // src/app/api/guests/route.ts
-// GET: List guest assignments with filters
-// POST: Create a new guest assignment
+// =============================================================================
+// Guests API - List and Create Guest Assignments
+// =============================================================================
+// Phase 5 Update: Added organization_id, tier, reference_code on guest creation
+// =============================================================================
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
-import { CreateGuestSchema, GuestFiltersSchema } from '@/lib/validation/guests';
-import { checkTablePermission } from '@/lib/permissions';
-import { Prisma } from '@prisma/client';
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
+import { GuestFiltersSchema, CreateGuestSchema } from "@/lib/validation/guests";
+import {
+  generateGuestReferenceCode,
+  getOrganizationIdFromEvent,
+} from "@/lib/reference-codes";
 
 // =============================================================================
-// GET - List Guest Assignments
+// GET /api/guests - List Guest Assignments
 // =============================================================================
 
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Parse query params
-    const searchParams = Object.fromEntries(request.nextUrl.searchParams);
-    const filters = GuestFiltersSchema.parse(searchParams);
+    const { searchParams } = new URL(request.url);
+    const filters = GuestFiltersSchema.parse({
+      event_id: searchParams.get("event_id") || undefined,
+      table_id: searchParams.get("table_id") || undefined,
+      user_id: searchParams.get("user_id") || undefined,
+      order_id: searchParams.get("order_id") || undefined,
+      checked_in: searchParams.get("checked_in") === "true" ? true : 
+                  searchParams.get("checked_in") === "false" ? false : undefined,
+      page: searchParams.get("page") ? parseInt(searchParams.get("page")!) : 1,
+      limit: searchParams.get("limit") ? parseInt(searchParams.get("limit")!) : 50,
+    });
 
     // Build where clause
-    const where: Prisma.GuestAssignmentWhereInput = {};
+    const where: any = {};
 
-    if (filters.event_id) {
-      where.event_id = filters.event_id;
-    }
-
-    if (filters.table_id) {
-      where.table_id = filters.table_id;
-    }
-
-    if (filters.user_id) {
-      where.user_id = filters.user_id;
-    }
-
-    if (filters.order_id) {
-      where.order_id = filters.order_id;
-    }
-
+    if (filters.event_id) where.event_id = filters.event_id;
+    if (filters.table_id) where.table_id = filters.table_id;
+    if (filters.user_id) where.user_id = filters.user_id;
+    if (filters.order_id) where.order_id = filters.order_id;
     if (filters.checked_in !== undefined) {
       where.checked_in_at = filters.checked_in ? { not: null } : null;
     }
 
-    if (filters.search) {
-      where.OR = [
-        { display_name: { contains: filters.search, mode: 'insensitive' } },
-        { user: { email: { contains: filters.search, mode: 'insensitive' } } },
-        { user: { first_name: { contains: filters.search, mode: 'insensitive' } } },
-        { user: { last_name: { contains: filters.search, mode: 'insensitive' } } },
-      ];
-    }
-
-    // Non-admins can only see guests at tables they have access to
+    // Non-admins can only see their own guest assignments or tables they manage
     if (!user.isAdmin) {
       where.OR = [
-        { user_id: user.id }, // Own assignment
-        { table: { primary_owner_id: user.id } }, // Tables they own
-        { table: { user_roles: { some: { user_id: user.id } } } }, // Tables they have role on
+        { user_id: user.id },
+        { table: { primary_owner_id: user.id } },
+        { table: { user_roles: { some: { user_id: user.id } } } },
       ];
     }
 
-    // Get total count for pagination
     const total = await prisma.guestAssignment.count({ where });
 
-    // Get guest assignments with related data
     const guests = await prisma.guestAssignment.findMany({
       where,
       include: {
@@ -86,21 +76,20 @@ export async function GET(request: NextRequest) {
             id: true,
             name: true,
             slug: true,
-            type: true,
+            reference_code: true,
           },
         },
         order: {
           select: {
             id: true,
-            user_id: true,
-            amount_cents: true,
+            quantity: true,
             status: true,
-          },
-        },
-        event: {
-          select: {
-            id: true,
-            name: true,
+            product: {
+              select: {
+                name: true,
+                tier: true,
+              },
+            },
           },
         },
         tags: {
@@ -109,7 +98,7 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-      orderBy: { created_at: 'desc' },
+      orderBy: { created_at: "desc" },
       skip: (filters.page - 1) * filters.limit,
       take: filters.limit,
     });
@@ -124,53 +113,48 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('List guests error:', error);
-
-    if (error instanceof Error && error.name === 'ZodError') {
-      return NextResponse.json({ error: 'Invalid query parameters' }, { status: 400 });
-    }
-
-    return NextResponse.json({ error: 'Failed to list guests' }, { status: 500 });
+    console.error("List guests error:", error);
+    return NextResponse.json({ error: "Failed to list guests" }, { status: 500 });
   }
 }
 
 // =============================================================================
-// POST - Create Guest Assignment
+// POST /api/guests - Create Guest Assignment
 // =============================================================================
 
 export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await request.json();
     const data = CreateGuestSchema.parse(body);
 
-    // Check permission if assigning to a table
-    if (data.table_id) {
-      const permission = await checkTablePermission(user.id, data.table_id, 'add_guest');
-      if (!permission.allowed) {
-        return NextResponse.json({ error: permission.reason }, { status: 403 });
-      }
-    }
-
-    // Verify order exists and has available seats
+    // Verify order exists and is completed
     const order = await prisma.order.findUnique({
       where: { id: data.order_id },
       include: {
-        _count: { select: { guest_assignments: true } },
+        product: {
+          select: { tier: true },
+        },
+        event: {
+          select: { organization_id: true },
+        },
+        _count: {
+          select: { guest_assignments: true },
+        },
       },
     });
 
     if (!order) {
-      return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    if (order.status !== 'COMPLETED') {
+    if (order.status !== "COMPLETED") {
       return NextResponse.json(
-        { error: 'Cannot assign guest to incomplete order' },
+        { error: "Cannot assign guest to incomplete order" },
         { status: 400 }
       );
     }
@@ -179,7 +163,7 @@ export async function POST(request: NextRequest) {
     const assignedSeats = order._count.guest_assignments;
     if (assignedSeats >= order.quantity) {
       return NextResponse.json(
-        { error: 'No available seats on this order' },
+        { error: "No available seats on this order" },
         { status: 400 }
       );
     }
@@ -190,13 +174,13 @@ export async function POST(request: NextRequest) {
     if (!guestUserId && data.email) {
       // Find or create user by email
       let guestUser = await prisma.user.findUnique({
-        where: { email: data.email },
+        where: { email: data.email.toLowerCase() },
       });
 
       if (!guestUser) {
         guestUser = await prisma.user.create({
           data: {
-            email: data.email,
+            email: data.email.toLowerCase(),
             first_name: data.first_name,
             last_name: data.last_name,
           },
@@ -208,7 +192,7 @@ export async function POST(request: NextRequest) {
 
     if (!guestUserId) {
       return NextResponse.json(
-        { error: 'Either user_id or email must be provided' },
+        { error: "Either user_id or email must be provided" },
         { status: 400 }
       );
     }
@@ -224,21 +208,29 @@ export async function POST(request: NextRequest) {
 
       if (existingAssignment) {
         return NextResponse.json(
-          { error: 'User is already assigned to this table' },
+          { error: "User is already assigned to this table" },
           { status: 409 }
         );
       }
     }
 
+    // Phase 5: Get organization_id and generate reference_code
+    const organizationId = order.event.organization_id;
+    const referenceCode = await generateGuestReferenceCode(organizationId);
+    const tier = order.product.tier;
+
     // Create guest assignment
     const guestAssignment = await prisma.guestAssignment.create({
       data: {
         event_id: data.event_id,
+        organization_id: organizationId,  // Phase 5
         table_id: data.table_id,
         user_id: guestUserId,
         order_id: data.order_id,
         display_name: data.display_name,
         dietary_restrictions: data.dietary_restrictions,
+        tier: tier,  // Phase 5
+        reference_code: referenceCode,  // Phase 5
       },
       include: {
         user: {
@@ -247,7 +239,6 @@ export async function POST(request: NextRequest) {
             email: true,
             first_name: true,
             last_name: true,
-            phone: true,
           },
         },
         table: {
@@ -260,43 +251,39 @@ export async function POST(request: NextRequest) {
         order: {
           select: {
             id: true,
-            user_id: true,
+            quantity: true,
           },
         },
       },
     });
 
     // Log activity
-    const event = await prisma.event.findUnique({
-      where: { id: data.event_id },
-      select: { organization_id: true },
-    });
-
-    if (event) {
-      await prisma.activityLog.create({
-        data: {
-          organization_id: event.organization_id,
-          event_id: data.event_id,
-          actor_id: user.id,
-          action: 'GUEST_ADDED',
-          entity_type: 'GUEST_ASSIGNMENT',
-          entity_id: guestAssignment.id,
-          metadata: {
-            guest_user_id: guestUserId,
-            table_id: data.table_id,
-          },
+    await prisma.activityLog.create({
+      data: {
+        organization_id: organizationId,
+        event_id: data.event_id,
+        actor_id: user.id,
+        action: "GUEST_ADDED",
+        entity_type: "GUEST_ASSIGNMENT",
+        entity_id: guestAssignment.id,
+        metadata: {
+          guest_user_id: guestUserId,
+          table_id: data.table_id,
+          order_id: data.order_id,
+          reference_code: referenceCode,
+          tier: tier,
         },
-      });
-    }
+      },
+    });
 
     return NextResponse.json({ guest: guestAssignment }, { status: 201 });
   } catch (error) {
-    console.error('Create guest error:', error);
+    console.error("Create guest error:", error);
 
-    if (error instanceof Error && error.name === 'ZodError') {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    if (error instanceof Error && error.name === "ZodError") {
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    return NextResponse.json({ error: 'Failed to create guest' }, { status: 500 });
+    return NextResponse.json({ error: "Failed to create guest" }, { status: 500 });
   }
 }

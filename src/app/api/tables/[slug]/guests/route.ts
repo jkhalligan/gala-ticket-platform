@@ -1,45 +1,39 @@
+// src/app/api/tables/[slug]/guests/route.ts
 // =============================================================================
-// Table Guests API Route
+// Table Guests API - List and Add Guests to Table
 // =============================================================================
-// GET  /api/tables/[slug]/guests  - List guests at this table
-// POST /api/tables/[slug]/guests  - Add a guest to this table (claim placeholder seat)
+// Phase 5 Update: Added organization_id, tier, and reference_code on guest creation
 // =============================================================================
-
-export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { checkTablePermission } from "@/lib/permissions";
 import { z } from "zod";
+import { 
+  generateGuestReferenceCode, 
+  getOrganizationIdFromEvent 
+} from "@/lib/reference-codes";
 
 // =============================================================================
-// Add Guest Schema
+// Validation Schemas
 // =============================================================================
 
 const AddGuestSchema = z.object({
-  // Either provide user_id of existing user, or email to create/find user
   user_id: z.string().optional(),
   email: z.string().email().optional(),
-  
-  // Optional user details (used when creating new user)
-  first_name: z.string().max(100).optional(),
-  last_name: z.string().max(100).optional(),
-  phone: z.string().max(50).optional(),
-  
-  // Guest assignment details
-  display_name: z.string().max(200).optional(),
-  dietary_restrictions: z.any().optional(), // JSON
-  
-  // Which order to claim the seat from (optional - will find available if not specified)
-  order_id: z.string().optional(),
-}).refine(
-  (data) => data.user_id || data.email,
-  { message: "Either user_id or email must be provided" }
-);
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
+  phone: z.string().optional(),
+  display_name: z.string().optional(),
+  dietary_restrictions: z.any().optional(),
+  order_id: z.string(), // Required: must specify which order's placeholder seat to claim
+}).refine(data => data.user_id || data.email, {
+  message: "Either user_id or email is required",
+});
 
 // =============================================================================
-// GET /api/tables/[slug]/guests
+// GET /api/tables/[slug]/guests - List guests at table
 // =============================================================================
 
 export async function GET(
@@ -58,6 +52,7 @@ export async function GET(
     // 2. Find table
     const table = await prisma.table.findFirst({
       where: { slug },
+      include: { event: true },
     });
 
     if (!table) {
@@ -73,7 +68,7 @@ export async function GET(
       );
     }
 
-    // 4. Fetch guests
+    // 4. Get guests with user info
     const guests = await prisma.guestAssignment.findMany({
       where: { table_id: table.id },
       include: {
@@ -89,66 +84,51 @@ export async function GET(
         order: {
           select: {
             id: true,
-            user_id: true,
             quantity: true,
-            amount_cents: true,
+            status: true,
+            user_id: true,
           },
         },
         tags: {
-          include: { tag: true },
+          include: {
+            tag: true,
+          },
         },
       },
       orderBy: { created_at: "asc" },
     });
 
-    // 5. Calculate available placeholder seats
-    const orders = await prisma.order.findMany({
-      where: { table_id: table.id, status: "COMPLETED" },
-      select: { id: true, user_id: true, quantity: true },
+    // 5. Calculate placeholder stats
+    const completedOrders = await prisma.order.findMany({
+      where: {
+        table_id: table.id,
+        status: "COMPLETED",
+      },
+      select: { quantity: true },
     });
 
-    const totalPurchased = orders.reduce((sum, o) => sum + o.quantity, 0);
-    const assignedSeats = guests.length;
-    const placeholderSeats = Math.max(0, totalPurchased - assignedSeats);
+    const totalPurchased = completedOrders.reduce((sum, o) => sum + o.quantity, 0);
+    const filledSeats = guests.length;
+    const placeholderSeats = totalPurchased - filledSeats;
 
     return NextResponse.json({
-      table_id: table.id,
-      table_name: table.name,
-      guests: guests.map((g) => ({
-        id: g.id,
-        user_id: g.user_id,
-        order_id: g.order_id,
-        display_name: g.display_name,
-        dietary_restrictions: g.dietary_restrictions,
-        bidder_number: g.bidder_number,
-        auction_registered: g.auction_registered,
-        checked_in_at: g.checked_in_at?.toISOString() || null,
-        created_at: g.created_at.toISOString(),
-        user: {
-          ...g.user,
-          full_name: [g.user.first_name, g.user.last_name].filter(Boolean).join(" ") || null,
-        },
-        is_self_pay: g.order.user_id === g.user_id,
-        tags: g.tags.map((t) => t.tag),
-      })),
+      guests,
       stats: {
-        total_guests: guests.length,
+        total_purchased: totalPurchased,
+        filled_seats: filledSeats,
         placeholder_seats: placeholderSeats,
-        can_add_more: placeholderSeats > 0,
+        capacity: table.capacity,
+        remaining_capacity: table.capacity - totalPurchased,
       },
     });
-
   } catch (error) {
-    console.error("Error listing table guests:", error);
-    return NextResponse.json(
-      { error: "Failed to list guests" },
-      { status: 500 }
-    );
+    console.error("List table guests error:", error);
+    return NextResponse.json({ error: "Failed to list guests" }, { status: 500 });
   }
 }
 
 // =============================================================================
-// POST /api/tables/[slug]/guests
+// POST /api/tables/[slug]/guests - Add guest to table
 // =============================================================================
 
 export async function POST(
@@ -237,53 +217,58 @@ export async function POST(
       );
     }
 
-    // 7. Find an order with available placeholder seats
-    const orders = await prisma.order.findMany({
-      where: { table_id: table.id, status: "COMPLETED" },
+    // 7. Verify order exists and has placeholder seats
+    const order = await prisma.order.findUnique({
+      where: { id: data.order_id },
       include: {
-        guest_assignments: { select: { id: true } },
+        product: { select: { tier: true } },
+        _count: { select: { guest_assignments: true } },
       },
-      orderBy: { created_at: "asc" },
     });
 
-    let targetOrder;
-    if (data.order_id) {
-      // Use specified order
-      targetOrder = orders.find((o) => o.id === data.order_id);
-      if (!targetOrder) {
-        return NextResponse.json({ error: "Order not found" }, { status: 404 });
-      }
-      if (targetOrder.guest_assignments.length >= targetOrder.quantity) {
-        return NextResponse.json(
-          { error: "No available seats in this order" },
-          { status: 400 }
-        );
-      }
-    } else {
-      // Find first order with available seats
-      targetOrder = orders.find(
-        (o) => o.guest_assignments.length < o.quantity
-      );
+    if (!order) {
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    if (!targetOrder) {
+    if (order.table_id !== table.id) {
       return NextResponse.json(
-        { error: "No available seats at this table" },
+        { error: "Order does not belong to this table" },
         { status: 400 }
       );
     }
 
-    // 8. Create guest assignment
+    if (order.status !== "COMPLETED") {
+      return NextResponse.json(
+        { error: "Order is not completed" },
+        { status: 400 }
+      );
+    }
+
+    const usedSeats = order._count.guest_assignments;
+    if (usedSeats >= order.quantity) {
+      return NextResponse.json(
+        { error: "No placeholder seats available for this order" },
+        { status: 400 }
+      );
+    }
+
+    // 8. Get organization_id and generate reference_code (Phase 5)
+    const organizationId = await getOrganizationIdFromEvent(table.event_id);
+    const referenceCode = await generateGuestReferenceCode(organizationId);
+    const tier = order.product.tier; // Snapshot tier from product
+
+    // 9. Create guest assignment
     const guestAssignment = await prisma.guestAssignment.create({
       data: {
         event_id: table.event_id,
+        organization_id: organizationId,  // Phase 5
         table_id: table.id,
         user_id: guestUser.id,
-        order_id: targetOrder.id,
-        display_name: data.display_name || 
-          [guestUser.first_name, guestUser.last_name].filter(Boolean).join(" ") || 
-          null,
-        dietary_restrictions: data.dietary_restrictions || null,
+        order_id: order.id,
+        display_name: data.display_name,
+        dietary_restrictions: data.dietary_restrictions,
+        tier: tier,  // Phase 5: snapshot from product
+        reference_code: referenceCode,  // Phase 5
       },
       include: {
         user: {
@@ -297,46 +282,27 @@ export async function POST(
       },
     });
 
-    // 9. Log activity
+    // 10. Log activity
     await prisma.activityLog.create({
       data: {
-        organization_id: table.event.organization_id,
+        organization_id: organizationId,
         event_id: table.event_id,
         actor_id: user.id,
         action: "GUEST_ADDED",
         entity_type: "GUEST_ASSIGNMENT",
         entity_id: guestAssignment.id,
         metadata: {
-          table_id: table.id,
-          table_name: table.name,
           guest_email: guestUser.email,
-          order_id: targetOrder.id,
+          table_slug: table.slug,
+          reference_code: referenceCode,
+          tier: tier,
         },
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      guest: {
-        id: guestAssignment.id,
-        user_id: guestAssignment.user_id,
-        order_id: guestAssignment.order_id,
-        display_name: guestAssignment.display_name,
-        user: {
-          ...guestAssignment.user,
-          full_name: [guestAssignment.user.first_name, guestAssignment.user.last_name]
-            .filter(Boolean)
-            .join(" ") || null,
-        },
-        created_at: guestAssignment.created_at.toISOString(),
-      },
-    }, { status: 201 });
-
+    return NextResponse.json({ guest: guestAssignment }, { status: 201 });
   } catch (error) {
-    console.error("Error adding guest:", error);
-    return NextResponse.json(
-      { error: "Failed to add guest" },
-      { status: 500 }
-    );
+    console.error("Add guest error:", error);
+    return NextResponse.json({ error: "Failed to add guest" }, { status: 500 });
   }
 }

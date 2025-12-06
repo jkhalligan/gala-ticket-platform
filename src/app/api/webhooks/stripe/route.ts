@@ -1,8 +1,10 @@
+// src/app/api/webhooks/stripe/route.ts
 // =============================================================================
 // Stripe Webhook Handler
 // =============================================================================
 // POST /api/webhooks/stripe
 // Handles payment_intent.succeeded to complete orders and create guest assignments
+// Phase 5 Update: Added reference_code, organization_id, and tier fields
 // =============================================================================
 
 export const runtime = "nodejs";
@@ -12,6 +14,12 @@ import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { constructWebhookEvent } from "@/lib/stripe";
 import { randomBytes } from "crypto";
+import { 
+  generateTableReferenceCode, 
+  generateGuestReferenceCode,
+  getOrganizationIdFromEvent,
+  getProductTier,
+} from "@/lib/reference-codes";
 
 // =============================================================================
 // Webhook Configuration
@@ -151,15 +159,17 @@ async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent)
     return;
   }
 
-  // 2. Get event for activity logging
-  const event = await prisma.event.findUnique({
+  // 2. Get event for activity logging and organization_id
+  const eventRecord = await prisma.event.findUnique({
     where: { id: eventId },
     select: { organization_id: true },
   });
 
-  if (!event) {
+  if (!eventRecord) {
     throw new Error(`Event not found: ${eventId}`);
   }
+
+  const organizationId = eventRecord.organization_id;
 
   // 3. Handle different order flows
   let finalTableId = tableId;
@@ -169,6 +179,7 @@ async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent)
     finalTableId = await createPrepaidTable({
       eventId,
       userId,
+      organizationId,
       paymentIntent,
     });
   }
@@ -203,22 +214,31 @@ async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent)
     });
   }
 
-  // 5. Create guest assignment for the buyer (first seat)
+  // 5. Get product tier for guest assignment (Phase 5)
+  const tier = await getProductTier(productId);
+
+  // 6. Generate guest reference code (Phase 5)
+  const guestReferenceCode = await generateGuestReferenceCode(organizationId);
+
+  // 7. Create guest assignment for the buyer (first seat)
   await prisma.guestAssignment.create({
     data: {
       event_id: eventId,
+      organization_id: organizationId,  // Phase 5
       table_id: finalTableId,
       user_id: userId,
       order_id: order.id,
+      tier: tier as any,  // Phase 5: snapshot from product
+      reference_code: guestReferenceCode,  // Phase 5
     },
   });
 
-  // 6. Create placeholder logic note:
+  // 8. Create placeholder logic note:
   // Remaining seats (quantity - 1) are "placeholder" seats
   // They exist as (order.quantity - guestAssignments.count) 
   // No explicit records needed - calculated dynamically
 
-  // 7. Increment promo code usage
+  // 9. Increment promo code usage
   if (promoCodeId) {
     await prisma.promoCode.update({
       where: { id: promoCodeId },
@@ -226,50 +246,51 @@ async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent)
     });
   }
 
-  // 8. Log activity
+  // 10. Log activity
   await prisma.activityLog.create({
     data: {
-      organization_id: event.organization_id,
+      organization_id: organizationId,
       event_id: eventId,
       actor_id: userId,
       action: "ORDER_COMPLETED",
       entity_type: "ORDER",
       entity_id: order.id,
       metadata: {
-        order_flow: orderFlow,
         amount_cents: paymentIntent.amount,
         quantity,
-        table_id: finalTableId,
+        order_flow: orderFlow,
         stripe_payment_intent_id: paymentIntent.id,
       },
     },
   });
 
-  console.log(`✅ Order ${order.id} completed successfully`);
+  console.log(`✅ Order ${order.id} completed with ${quantity} seat(s)`);
 }
 
 /**
- * Handle failed payment
+ * Handle failed payment - update order status
  */
 async function handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
   console.log(`❌ Processing payment_intent.payment_failed: ${paymentIntent.id}`);
 
-  // Find and update the pending order
   const order = await prisma.order.findUnique({
     where: { stripe_payment_intent_id: paymentIntent.id },
   });
 
-  if (order && order.status === "PENDING") {
-    await prisma.order.update({
-      where: { id: order.id },
-      data: {
-        status: "CANCELLED",
-        notes: `Payment failed: ${paymentIntent.last_payment_error?.message || "Unknown error"}`,
-      },
-    });
-
-    console.log(`📝 Order ${order.id} marked as CANCELLED due to payment failure`);
+  if (!order) {
+    console.log("ℹ️ No order found for failed payment intent");
+    return;
   }
+
+  // Update order to reflect failure (keep as PENDING for retry)
+  await prisma.order.update({
+    where: { id: order.id },
+    data: {
+      notes: `Payment failed: ${paymentIntent.last_payment_error?.message || "Unknown error"}`,
+    },
+  });
+
+  console.log(`📝 Order ${order.id} marked with payment failure`);
 }
 
 // =============================================================================
@@ -277,42 +298,38 @@ async function handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
 // =============================================================================
 
 /**
- * Create a new PREPAID table for full table purchases
+ * Create a PREPAID table for full table purchases
+ * Phase 5 Update: Added reference_code generation
  */
-async function createPrepaidTable(params: {
+async function createPrepaidTable({
+  eventId,
+  userId,
+  organizationId,
+  paymentIntent,
+}: {
   eventId: string;
   userId: string;
+  organizationId: string;
   paymentIntent: Stripe.PaymentIntent;
 }): Promise<string> {
-  const { eventId, userId, paymentIntent } = params;
+  const tableName = paymentIntent.metadata.table_name || "My Table";
+  const capacity = parseInt(paymentIntent.metadata.table_capacity || "10", 10);
 
-  // Get table info from metadata if provided
-  const tableName = paymentIntent.metadata.table_name || `Table ${Date.now()}`;
-  const tableInternalName = paymentIntent.metadata.table_internal_name || null;
-
-  // Generate unique slug
+  // Generate slug and reference code (Phase 5)
   const slug = generateTableSlug(tableName);
+  const referenceCode = await generateTableReferenceCode(eventId);
 
-  // Get product for capacity (full table products define capacity)
-  const product = await prisma.product.findUnique({
-    where: { id: paymentIntent.metadata.product_id },
-  });
-
-  // Default capacity for full tables (typically 10)
-  const capacity = 10;
-
-  // Create the table
   const table = await prisma.table.create({
     data: {
       event_id: eventId,
       primary_owner_id: userId,
       name: tableName,
-      internal_name: tableInternalName,
       slug,
       type: "PREPAID",
-      capacity,
       status: "ACTIVE",
+      capacity,
       custom_total_price_cents: paymentIntent.amount,
+      reference_code: referenceCode,  // Phase 5
     },
   });
 
@@ -326,31 +343,25 @@ async function createPrepaidTable(params: {
   });
 
   // Log table creation
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { organization_id: true },
+  await prisma.activityLog.create({
+    data: {
+      organization_id: organizationId,
+      event_id: eventId,
+      actor_id: userId,
+      action: "TABLE_CREATED",
+      entity_type: "TABLE",
+      entity_id: table.id,
+      metadata: {
+        table_name: tableName,
+        type: "PREPAID",
+        capacity,
+        reference_code: referenceCode,
+        stripe_payment_intent_id: paymentIntent.id,
+      },
+    },
   });
 
-  if (event) {
-    await prisma.activityLog.create({
-      data: {
-        organization_id: event.organization_id,
-        event_id: eventId,
-        actor_id: userId,
-        action: "TABLE_CREATED",
-        entity_type: "TABLE",
-        entity_id: table.id,
-        metadata: {
-          table_name: tableName,
-          type: "PREPAID",
-          capacity,
-          stripe_payment_intent_id: paymentIntent.id,
-        },
-      },
-    });
-  }
-
-  console.log(`🪑 Created PREPAID table: ${table.name} (${table.id})`);
+  console.log(`🪑 Created PREPAID table: ${table.name} (${table.id}) [${referenceCode}]`);
 
   return table.id;
 }
