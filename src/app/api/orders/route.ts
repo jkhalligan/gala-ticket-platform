@@ -13,9 +13,9 @@ import {
   generateGuestReferenceCode,
   getProductTier,
 } from "@/lib/reference-codes";
-import { 
-  OrderFiltersSchema, 
-  CreateAdminOrderSchema 
+import {
+  OrderQuerySchema,
+  AdminCreateOrderSchema
 } from "@/lib/validation/orders";
 
 // =============================================================================
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const filters = OrderFiltersSchema.parse({
+    const filters = OrderQuerySchema.parse({
       event_id: searchParams.get("event_id") || undefined,
       user_id: searchParams.get("user_id") || undefined,
       table_id: searchParams.get("table_id") || undefined,
@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const data = CreateAdminOrderSchema.parse(body);
+    const data = AdminCreateOrderSchema.parse(body);
 
     // Verify product exists and get event info
     const product = await prisma.product.findUnique({
