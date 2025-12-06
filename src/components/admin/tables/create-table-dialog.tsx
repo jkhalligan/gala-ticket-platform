@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Loader2, CheckCircle, XCircle } from "lucide-react";
 
+import { useDebounce } from "@/hooks/use-debounce";
 import {
   Dialog,
   DialogContent,
@@ -54,7 +55,9 @@ export function CreateTableDialog({
 
   // Slug validation state
   const [slugStatus, setSlugStatus] = React.useState<"idle" | "checking" | "available" | "taken">("idle");
-  const slugCheckTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Debounce the slug value for validation (500ms delay)
+  const debouncedSlug = useDebounce(slug, 500);
 
   // Fetch events when dialog opens
   React.useEffect(() => {
@@ -75,43 +78,41 @@ export function CreateTableDialog({
     }
   }, [name, slug]);
 
-  // Check slug availability with debounce
+  // Show checking state when slug changes but debounced value hasn't caught up
   React.useEffect(() => {
-    if (!slug || !eventId) {
+    if (slug && eventId && slug !== debouncedSlug) {
+      setSlugStatus("checking");
+    }
+  }, [slug, eventId, debouncedSlug]);
+
+  // Check slug availability when debounced value changes
+  React.useEffect(() => {
+    if (!debouncedSlug || !eventId) {
       setSlugStatus("idle");
       return;
     }
 
-    setSlugStatus("checking");
-
-    if (slugCheckTimeoutRef.current) {
-      clearTimeout(slugCheckTimeoutRef.current);
-    }
-
-    slugCheckTimeoutRef.current = setTimeout(async () => {
+    async function validateSlug() {
+      setSlugStatus("checking");
       try {
         const response = await fetch(
-          `/api/admin/tables/check-slug?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}`
+          `/api/admin/tables/validate-slug?slug=${encodeURIComponent(debouncedSlug)}&eventId=${encodeURIComponent(eventId)}`
         );
         if (response.ok) {
           const data = await response.json();
-          setSlugStatus(data.available ? "available" : "taken");
+          setSlugStatus(data.isUnique ? "available" : "taken");
         } else {
-          // If endpoint doesn't exist, assume available (API will handle uniqueness)
+          // If endpoint returns an error, assume available (API will handle uniqueness on submit)
           setSlugStatus("available");
         }
       } catch {
-        // On error, assume available (API will handle uniqueness)
+        // On network error, assume available (API will handle uniqueness on submit)
         setSlugStatus("available");
       }
-    }, 500);
+    }
 
-    return () => {
-      if (slugCheckTimeoutRef.current) {
-        clearTimeout(slugCheckTimeoutRef.current);
-      }
-    };
-  }, [slug, eventId]);
+    validateSlug();
+  }, [debouncedSlug, eventId]);
 
   async function fetchEvents() {
     setEventsLoading(true);
