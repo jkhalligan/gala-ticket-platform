@@ -7,6 +7,7 @@ import { MoreHorizontal, Eye, Pencil, Trash2, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { DataTable, DataTableColumnHeader } from "@/components/admin/data-table";
+import { CreateTableDialog } from "@/components/admin/tables/create-table-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -135,24 +136,30 @@ const columns: ColumnDef<TableData>[] = [
 export default function TablesPage() {
   const [tables, setTables] = React.useState<TableData[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+
+  const fetchTables = React.useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/tables");
+      if (response.ok) {
+        const data = await response.json();
+        setTables(data.tables || []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch tables:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   React.useEffect(() => {
-    async function fetchTables() {
-      try {
-        const response = await fetch("/api/admin/tables");
-        if (response.ok) {
-          const data = await response.json();
-          setTables(data.tables || []);
-        }
-      } catch (error) {
-        console.error("Failed to fetch tables:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
     fetchTables();
-  }, []);
+  }, [fetchTables]);
+
+  function handleTableCreated() {
+    // Refresh the tables list after successful creation
+    fetchTables();
+  }
 
   return (
     <div className="space-y-6">
@@ -160,11 +167,9 @@ export default function TablesPage() {
         title="Tables Management"
         description="View and manage all event tables"
       >
-        <Button asChild>
-          <Link href="/admin/tables/new">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Table
-          </Link>
+        <Button onClick={() => setCreateDialogOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add Table
         </Button>
       </PageHeader>
 
@@ -175,6 +180,12 @@ export default function TablesPage() {
         searchPlaceholder="Search tables..."
         isLoading={isLoading}
         emptyMessage="No tables found."
+      />
+
+      <CreateTableDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        onSuccess={handleTableCreated}
       />
     </div>
   );
