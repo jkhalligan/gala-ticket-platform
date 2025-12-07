@@ -369,11 +369,11 @@ export default function GuestDetailPage() {
             )}
             <div>
               <label className="text-sm font-medium text-muted-foreground">Order Status</label>
-              <p>
+              <div>
                 <Badge variant={guest.order.status === "COMPLETED" ? "default" : "secondary"}>
                   {guest.order.status}
                 </Badge>
-              </p>
+              </div>
             </div>
             <div>
               <label className="text-sm font-medium text-muted-foreground">Order Amount</label>
