@@ -69,7 +69,7 @@ export default function GuestsPage() {
           const guest = row.original;
           return (
             <div className="group flex items-center gap-2">
-              <div className="flex flex-col">
+              <div className="flex flex-col min-w-0">
                 <Link
                   href={`/admin/guests/${guest.id}`}
                   className="font-medium text-primary hover:underline"
@@ -81,12 +81,13 @@ export default function GuestsPage() {
                 </span>
               </div>
               <button
+                type="button"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
                   handleQuickView(guest.id, guest.name);
                 }}
-                className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center hover:bg-muted rounded"
+                className="shrink-0 h-8 w-8 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted"
                 title="Quick view"
               >
                 <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
