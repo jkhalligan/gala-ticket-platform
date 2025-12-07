@@ -68,7 +68,7 @@ export default function GuestsPage() {
         cell: ({ row }) => {
           const guest = row.original;
           return (
-            <div className="group flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <div className="flex flex-col min-w-0">
                 <Link
                   href={`/admin/guests/${guest.id}`}

@@ -93,7 +93,7 @@ export default function OrdersPage() {
         cell: ({ row }) => {
           const order = row.original;
           return (
-            <div className="group flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <div className="flex flex-col min-w-0">
                 <Link
                   href={`/admin/orders/${order.id}`}

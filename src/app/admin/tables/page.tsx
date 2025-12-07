@@ -57,7 +57,7 @@ export default function TablesPage() {
         cell: ({ row }) => {
           const table = row.original;
           return (
-            <div className="group flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <div className="flex flex-col min-w-0">
                 <Link
                   href={`/admin/tables/${table.slug}`}
