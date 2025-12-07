@@ -144,12 +144,6 @@ export default function TablesPage() {
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => handleQuickView(table.slug, table.name)}
-                >
-                  <Maximize2 className="mr-2 h-4 w-4" />
-                  Quick view
-                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href={`/admin/tables/${table.slug}`}>
                     <Eye className="mr-2 h-4 w-4" />

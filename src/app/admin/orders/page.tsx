@@ -199,12 +199,6 @@ export default function OrdersPage() {
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => handleQuickView(order.id, order.buyerName)}
-                >
-                  <Maximize2 className="mr-2 h-4 w-4" />
-                  Quick view
-                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href={`/admin/orders/${order.id}`}>
                     <Eye className="mr-2 h-4 w-4" />

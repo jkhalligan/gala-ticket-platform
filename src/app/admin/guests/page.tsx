@@ -185,12 +185,6 @@ export default function GuestsPage() {
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => handleQuickView(guest.id, guest.name)}
-                >
-                  <Maximize2 className="mr-2 h-4 w-4" />
-                  Quick view
-                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href={`/admin/guests/${guest.id}`}>
                     <Eye className="mr-2 h-4 w-4" />

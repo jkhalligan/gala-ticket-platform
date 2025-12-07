@@ -98,7 +98,7 @@ export function GuestQuickView({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[400px] sm:w-[540px] flex flex-col">
+      <SheetContent className="w-full sm:max-w-[50%] flex flex-col">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             {guestName}
