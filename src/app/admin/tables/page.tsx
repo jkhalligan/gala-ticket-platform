@@ -57,7 +57,7 @@ export default function TablesPage() {
         cell: ({ row }) => {
           const table = row.original;
           return (
-            <div className="flex items-center gap-2 group">
+            <div className="group/cell flex items-center gap-2">
               <div className="flex flex-col">
                 <Link
                   href={`/admin/tables/${table.slug}`}
@@ -75,7 +75,7 @@ export default function TablesPage() {
                   e.stopPropagation();
                   handleQuickView(table.slug, table.name);
                 }}
-                className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-muted rounded"
+                className="opacity-0 group-hover/cell:opacity-100 transition-opacity p-1 hover:bg-muted rounded"
                 title="Quick view"
               >
                 <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
