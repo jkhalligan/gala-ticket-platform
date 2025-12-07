@@ -39,11 +39,17 @@ const columns: ColumnDef<TableData>[] = [
       <DataTableColumnHeader column={column} title="Name" />
     ),
     cell: ({ row }) => {
+      const table = row.original;
       return (
         <div className="flex flex-col">
-          <span className="font-medium">{row.getValue("name")}</span>
+          <Link
+            href={`/admin/tables/${table.slug}`}
+            className="font-medium text-primary hover:underline"
+          >
+            {row.getValue("name")}
+          </Link>
           <span className="text-xs text-muted-foreground">
-            {row.original.eventName}
+            {table.eventName}
           </span>
         </div>
       );

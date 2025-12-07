@@ -70,11 +70,17 @@ const columns: ColumnDef<OrderData>[] = [
       <DataTableColumnHeader column={column} title="Buyer" />
     ),
     cell: ({ row }) => {
+      const order = row.original;
       return (
         <div className="flex flex-col">
-          <span className="font-medium">{row.getValue("buyerName")}</span>
+          <Link
+            href={`/admin/orders/${order.id}`}
+            className="font-medium text-primary hover:underline"
+          >
+            {row.getValue("buyerName")}
+          </Link>
           <span className="text-xs text-muted-foreground">
-            {row.original.buyerEmail}
+            {order.buyerEmail}
           </span>
         </div>
       );

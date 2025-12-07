@@ -51,11 +51,17 @@ const columns: ColumnDef<GuestData>[] = [
       <DataTableColumnHeader column={column} title="Name" />
     ),
     cell: ({ row }) => {
+      const guest = row.original;
       return (
         <div className="flex flex-col">
-          <span className="font-medium">{row.getValue("name")}</span>
+          <Link
+            href={`/admin/guests/${guest.id}`}
+            className="font-medium text-primary hover:underline"
+          >
+            {row.getValue("name")}
+          </Link>
           <span className="text-xs text-muted-foreground">
-            {row.original.eventName}
+            {guest.eventName}
           </span>
         </div>
       );
