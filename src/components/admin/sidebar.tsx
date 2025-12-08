@@ -39,8 +39,8 @@ export function AdminSidebar({ user }: AdminSidebarProps) {
       {/* Logo / Brand */}
       <div className="flex h-16 items-center border-b px-6">
         <Link href="/admin" className="flex items-center gap-2 font-semibold">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            G
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground text-xl">
+            🎉
           </div>
           <span>Gala Admin</span>
         </Link>
