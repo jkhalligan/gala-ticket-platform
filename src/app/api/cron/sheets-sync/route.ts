@@ -5,9 +5,9 @@ import { syncAllActiveEvents } from '@/lib/sheets/sync';
 
 /**
  * Cron endpoint for scheduled Google Sheets sync
- * 
+ *
  * This endpoint should be configured in vercel.json to run on a schedule.
- * 
+ *
  * Example vercel.json:
  * {
  *   "crons": [{
@@ -15,12 +15,12 @@ import { syncAllActiveEvents } from '@/lib/sheets/sync';
  *     "schedule": "0 * * * *"
  *   }]
  * }
- * 
+ *
  * The schedule "0 * * * *" means every hour at minute 0.
  * Adjust as needed:
- * - "*/15 * * * *" = every 15 minutes
- * - "0 */2 * * *" = every 2 hours
- * - "0 9-17 * * *" = every hour from 9am-5pm
+ * - Every 15 minutes: "0,15,30,45 * * * *"
+ * - Every 2 hours: "0 0,2,4,6,8,10,12,14,16,18,20,22 * * *"
+ * - Every hour from 9am-5pm: "0 9-17 * * *"
  */
 
 export const runtime = 'nodejs';
