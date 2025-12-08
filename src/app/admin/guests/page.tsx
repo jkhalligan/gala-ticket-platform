@@ -30,6 +30,9 @@ interface GuestData {
   checkedIn: boolean;
   checkedInAt: string | null;
   eventName: string;
+  auctionRegistered: boolean;
+  bidderNumber: string | null;
+  dietaryRestrictions: any;
 }
 
 // Helper to get tier badge variant
@@ -44,6 +47,8 @@ function getTierVariant(tier: string): "default" | "secondary" | "outline" {
   }
 }
 
+const COLUMN_VISIBILITY_KEY = "guests-table-columns";
+
 export default function GuestsPage() {
   const [guests, setGuests] = React.useState<GuestData[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -51,6 +56,34 @@ export default function GuestsPage() {
   // Quick View state
   const [quickViewOpen, setQuickViewOpen] = React.useState(false);
   const [selectedGuest, setSelectedGuest] = React.useState<{ id: string; name: string } | null>(null);
+
+  // Column visibility state with localStorage persistence
+  const [columnVisibility, setColumnVisibility] = React.useState<Record<string, boolean>>({});
+
+  // Load column visibility from localStorage on mount
+  React.useEffect(() => {
+    const saved = localStorage.getItem(COLUMN_VISIBILITY_KEY);
+    if (saved) {
+      try {
+        setColumnVisibility(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse column visibility from localStorage");
+      }
+    } else {
+      // Default hidden columns
+      setColumnVisibility({
+        dietary_restrictions: false,
+        checkedIn: false,
+      });
+    }
+  }, []);
+
+  // Save column visibility to localStorage whenever it changes
+  React.useEffect(() => {
+    if (Object.keys(columnVisibility).length > 0) {
+      localStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(columnVisibility));
+    }
+  }, [columnVisibility]);
 
   const handleQuickView = React.useCallback((id: string, name: string) => {
     setSelectedGuest({ id, name });
@@ -141,6 +174,72 @@ export default function GuestsPage() {
             >
               {tableName}
             </Link>
+          );
+        },
+      },
+      {
+        accessorKey: "auctionRegistered",
+        id: "auction_registered",
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title="Auction Registration" />
+        ),
+        cell: ({ row }) => {
+          const registered = row.getValue("auctionRegistered") as boolean;
+          return (
+            <Badge variant={registered ? "default" : "outline"}>
+              {registered ? "Registered" : "Not Registered"}
+            </Badge>
+          );
+        },
+      },
+      {
+        accessorKey: "bidderNumber",
+        id: "bidder_number",
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title="Bidder #" />
+        ),
+        cell: ({ row }) => {
+          const bidderNumber = row.getValue("bidderNumber") as string | null;
+          return (
+            <div className="text-right font-mono">
+              {bidderNumber || "-"}
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: "dietaryRestrictions",
+        id: "dietary_restrictions",
+        header: "Dietary Restrictions",
+        cell: ({ row }) => {
+          const restrictions = row.getValue("dietaryRestrictions");
+
+          if (!restrictions) {
+            return <span className="text-muted-foreground text-sm">None</span>;
+          }
+
+          // Handle different JSON formats
+          let restrictionsList: string[] = [];
+          if (typeof restrictions === 'string') {
+            restrictionsList = [restrictions];
+          } else if (Array.isArray(restrictions)) {
+            restrictionsList = restrictions;
+          } else if (typeof restrictions === 'object') {
+            restrictionsList = Object.values(restrictions).filter(Boolean) as string[];
+          }
+
+          if (restrictionsList.length === 0) {
+            return <span className="text-muted-foreground text-sm">None</span>;
+          }
+
+          return (
+            <div className="flex flex-wrap gap-1">
+              {restrictionsList.map((restriction, idx) => (
+                <Badge key={idx} variant="secondary" className="text-xs">
+                  {restriction}
+                </Badge>
+              ))}
+            </div>
           );
         },
       },
@@ -243,6 +342,8 @@ export default function GuestsPage() {
         searchPlaceholder="Search guests..."
         isLoading={isLoading}
         emptyMessage="No guests found."
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={setColumnVisibility}
       />
 
       <GuestQuickView

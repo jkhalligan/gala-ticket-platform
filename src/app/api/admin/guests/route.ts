@@ -60,6 +60,9 @@ export async function GET() {
         checkedIn: assignment.checked_in_at !== null,
         checkedInAt: assignment.checked_in_at?.toISOString() || null,
         eventName: assignment.event.name,
+        auctionRegistered: assignment.auction_registered,
+        bidderNumber: assignment.bidder_number,
+        dietaryRestrictions: assignment.dietary_restrictions,
       };
     });
 

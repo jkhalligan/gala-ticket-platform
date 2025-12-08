@@ -56,6 +56,8 @@ interface DataTableProps<TData, TValue> {
   showSearch?: boolean;
   emptyMessage?: string;
   className?: string;
+  columnVisibility?: VisibilityState;
+  onColumnVisibilityChange?: React.Dispatch<React.SetStateAction<VisibilityState>>;
 }
 
 export function DataTable<TData, TValue>({
@@ -71,11 +73,17 @@ export function DataTable<TData, TValue>({
   showSearch = true,
   emptyMessage = "No results found.",
   className,
+  columnVisibility: externalColumnVisibility,
+  onColumnVisibilityChange: externalOnColumnVisibilityChange,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
+  const [internalColumnVisibility, setInternalColumnVisibility] = React.useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = React.useState({});
+
+  // Use external column visibility if provided, otherwise use internal state
+  const columnVisibility = externalColumnVisibility ?? internalColumnVisibility;
+  const setColumnVisibility = externalOnColumnVisibilityChange ?? setInternalColumnVisibility;
 
   const table = useReactTable({
     data,
