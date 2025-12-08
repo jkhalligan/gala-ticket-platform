@@ -41,22 +41,43 @@ export async function GET(request: NextRequest) {
     );
 
     try {
-      const { error } = await supabase.auth.verifyOtp({
+      console.log('[Auth Confirm] Starting verification');
+      console.log('[Auth Confirm] Token hash:', token_hash?.substring(0, 10) + '...');
+      console.log('[Auth Confirm] Type:', type);
+
+      const { data, error } = await supabase.auth.verifyOtp({
         type: type as any,
         token_hash,
       });
 
+      console.log('[Auth Confirm] Verification complete');
+      console.log('[Auth Confirm] Has session:', !!data?.session);
+      console.log('[Auth Confirm] Has user:', !!data?.user);
+
       if (error) {
-        console.error('Auth verification error:', error);
+        console.error('[Auth Confirm] Verification error:', error.message);
+        console.error('[Auth Confirm] Error code:', error.code);
+        console.error('[Auth Confirm] Full error:', JSON.stringify(error));
         return NextResponse.redirect(
           `${requestUrl.origin}/login?error=${encodeURIComponent(error.message)}`
         );
       }
 
+      if (!data?.session) {
+        console.error('[Auth Confirm] No session created after successful verification');
+        return NextResponse.redirect(
+          `${requestUrl.origin}/login?error=no_session_created`
+        );
+      }
+
+      console.log('[Auth Confirm] Session created successfully');
+      console.log('[Auth Confirm] User ID:', data.user?.id);
+      console.log('[Auth Confirm] Redirecting to:', redirect);
+
       // Successfully authenticated - redirect to intended destination
       return NextResponse.redirect(`${requestUrl.origin}${redirect}`);
     } catch (error) {
-      console.error('Auth callback error:', error);
+      console.error('[Auth Confirm] Unexpected error:', error);
       return NextResponse.redirect(
         `${requestUrl.origin}/login?error=authentication_failed`
       );
