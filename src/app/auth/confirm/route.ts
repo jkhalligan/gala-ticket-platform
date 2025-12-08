@@ -1,5 +1,5 @@
 // src/app/auth/confirm/route.ts
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -12,7 +12,28 @@ export async function GET(request: NextRequest) {
 
   if (token_hash && type) {
     const cookieStore = await cookies();
-    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Create Supabase client with cookies
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        auth: {
+          flowType: 'pkce',
+        },
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value;
+          },
+          set(name: string, value: string, options: any) {
+            cookieStore.set({ name, value, ...options });
+          },
+          remove(name: string, options: any) {
+            cookieStore.set({ name, value: '', ...options });
+          },
+        },
+      }
+    );
 
     try {
       const { error } = await supabase.auth.verifyOtp({
