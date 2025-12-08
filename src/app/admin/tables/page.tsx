@@ -11,6 +11,7 @@ import { CreateTableDialog } from "@/components/admin/tables/create-table-dialog
 import { TableQuickView } from "@/components/admin/quick-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -118,12 +119,28 @@ export default function TablesPage() {
           const capacity = row.original.capacity;
           const percentage = capacity > 0 ? Math.round((filled / capacity) * 100) : 0;
 
+          // Determine color based on percentage
+          let progressColor = "";
+          if (percentage === 100) {
+            progressColor = "bg-green-500"; // Full - green
+          } else if (percentage >= 67) {
+            progressColor = "bg-blue-500"; // 67-99% - blue
+          } else if (percentage >= 34) {
+            progressColor = "bg-yellow-500"; // 34-66% - yellow
+          } else {
+            progressColor = "bg-muted-foreground"; // 0-33% - gray
+          }
+
           return (
-            <div className="flex items-center gap-2">
-              <span>
-                {filled}/{capacity}
+            <div className="flex flex-col gap-1">
+              <span className="text-sm">
+                {filled}/{capacity} ({percentage}%)
               </span>
-              <span className="text-xs text-muted-foreground">({percentage}%)</span>
+              <Progress
+                value={percentage}
+                className="h-2 w-24"
+                indicatorClassName={progressColor}
+              />
             </div>
           );
         },
