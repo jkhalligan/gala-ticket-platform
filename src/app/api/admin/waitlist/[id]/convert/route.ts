@@ -77,7 +77,6 @@ export async function POST(
         targetUser = await prisma.user.create({
           data: {
             email,
-            auth_provider: "email",
           },
         });
       }

@@ -60,9 +60,9 @@ export async function syncEvent(options: SyncOptions): Promise<SyncResult> {
       throw new Error(`Event not found: ${eventId}`);
     }
 
-    // Allow events without status (development mode) or events that are explicitly ACTIVE
-    if (event.status && event.status !== 'ACTIVE') {
-      throw new Error(`Event is not active: ${event.status}`);
+    // Check if event is active
+    if (!event.is_active) {
+      throw new Error(`Event is not active`);
     }
 
     // Check if Google Sheets is configured
@@ -190,7 +190,7 @@ export async function syncAllActiveEvents(): Promise<SyncResult[]> {
 
   // Find all active events
   const events = await prisma.event.findMany({
-    where: { status: 'ACTIVE' },
+    where: { is_active: true },
     select: { id: true, name: true },
   });
 
@@ -311,9 +311,11 @@ export async function getSyncStatus(eventId: string): Promise<{
 
   const client = getSheetsClient();
 
+  const metadata = lastActivity?.metadata as { success?: boolean } | null;
+
   return {
     lastSync: lastActivity?.created_at || null,
-    lastSyncSuccess: lastActivity?.metadata?.success === true,
+    lastSyncSuccess: metadata?.success === true,
     spreadsheetUrl: client.getSpreadsheetUrl(),
   };
 }

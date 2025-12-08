@@ -298,6 +298,10 @@ export async function exportGuestToSheets(guestId: string): Promise<void> {
     throw new Error(`Guest not found: ${guestId}`);
   }
 
+  if (!guest.table) {
+    throw new Error(`Guest ${guestId} has no associated table`);
+  }
+
   // For now, we'll do a full export of the event
   // In the future, could optimize to update just this row
   await exportEventToSheets({ eventId: guest.table.event_id });

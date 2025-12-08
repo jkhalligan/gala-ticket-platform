@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { GuestFiltersSchema, CreateGuestSchema } from "@/lib/validation/guests";
@@ -228,7 +229,7 @@ export async function POST(request: NextRequest) {
         user_id: guestUserId,
         order_id: data.order_id,
         display_name: data.display_name,
-        dietary_restrictions: data.dietary_restrictions,
+        dietary_restrictions: data.dietary_restrictions as Prisma.InputJsonValue,
         tier: tier,  // Phase 5
         reference_code: referenceCode,  // Phase 5
       },

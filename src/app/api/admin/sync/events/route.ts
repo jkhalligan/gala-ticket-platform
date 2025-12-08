@@ -16,7 +16,7 @@ export async function GET() {
 
     const events = await prisma.event.findMany({
       where: {
-        status: "ACTIVE",
+        is_active: true,
       },
       select: {
         id: true,

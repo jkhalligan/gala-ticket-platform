@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     // Get the first active event (or you could pass event_id in the request)
     const event = await prisma.event.findFirst({
-      where: { status: "ACTIVE" },
+      where: { is_active: true },
       orderBy: { created_at: "desc" },
     });
 
@@ -122,7 +122,6 @@ export async function POST(request: NextRequest) {
       invitedUser = await prisma.user.create({
         data: {
           email,
-          auth_provider: "email",
         },
       });
     }

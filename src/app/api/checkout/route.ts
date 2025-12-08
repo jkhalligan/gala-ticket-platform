@@ -60,9 +60,13 @@ export async function POST(request: NextRequest) {
     }
 
     // 4. Find or create buyer user
-    let buyer = currentUser;
-    if (!buyer) {
-      buyer = await prisma.user.findUnique({
+    let buyerUserId: string;
+    let buyerEmail: string;
+    if (currentUser) {
+      buyerUserId = currentUser.id;
+      buyerEmail = currentUser.email;
+    } else {
+      let buyer = await prisma.user.findUnique({
         where: { email: data.buyer_info.email.toLowerCase() },
       });
 
@@ -76,6 +80,8 @@ export async function POST(request: NextRequest) {
           },
         });
       }
+      buyerUserId = buyer.id;
+      buyerEmail = buyer.email;
     }
 
     // 5. Validate table if joining existing
@@ -107,7 +113,14 @@ export async function POST(request: NextRequest) {
     }
 
     // 6. Validate promo code if provided
-    let promoValidation = { valid: true, promo_code_id: undefined as string | undefined, discount_cents: 0 };
+    let promoValidation: {
+      valid: boolean;
+      error?: string;
+      promo_code_id?: string;
+      discount_cents: number;
+      discount_type?: string;
+      discount_value?: number;
+    } = { valid: true, promo_code_id: undefined, discount_cents: 0 };
     if (data.promo_code) {
       const subtotal = product.price_cents * data.quantity;
       promoValidation = await validatePromoCode(data.promo_code, data.event_id, subtotal);
@@ -125,7 +138,7 @@ export async function POST(request: NextRequest) {
     // 8. Handle $0 orders (captain commitment or fully discounted)
     if (totalCents === 0) {
       const result = await createZeroDollarOrder({
-        user_id: buyer.id,
+        user_id: buyerUserId,
         event_id: data.event_id,
         organization_id: product.event.organization_id,
         product_id: data.product_id,
@@ -150,7 +163,7 @@ export async function POST(request: NextRequest) {
     const order = await prisma.order.create({
       data: {
         event_id: data.event_id,
-        user_id: buyer.id,
+        user_id: buyerUserId,
         product_id: data.product_id,
         table_id: tableId,
         promo_code_id: promoValidation.promo_code_id,
@@ -163,28 +176,26 @@ export async function POST(request: NextRequest) {
 
     // 10. Create PaymentIntent with metadata for webhook
     const paymentIntent = await createPaymentIntent({
-      amount: totalCents,
+      amount_cents: totalCents,
       currency: "usd",
       metadata: {
-        order_id: order.id,
         event_id: data.event_id,
-        user_id: buyer.id,
+        user_id: buyerUserId,
         product_id: data.product_id,
-        quantity: data.quantity.toString(),
+        quantity: data.quantity,
         order_flow: data.order_flow,
-        table_id: tableId || "",
-        table_name: data.table_info?.name || "",
-        table_capacity: data.order_flow === "full_table" ? "10" : "",
-        promo_code_id: promoValidation.promo_code_id || "",
+        table_id: tableId,
+        promo_code_id: promoValidation.promo_code_id,
+        table_name: data.table_info?.name,
       },
-      receipt_email: buyer.email,
+      receipt_email: buyerEmail,
     });
 
     // 11. Update order with PaymentIntent ID
     await prisma.order.update({
       where: { id: order.id },
       data: {
-        stripe_payment_intent_id: paymentIntent.id,
+        stripe_payment_intent_id: paymentIntent.paymentIntentId,
       },
     });
 
@@ -192,7 +203,7 @@ export async function POST(request: NextRequest) {
       success: true,
       requires_payment: true,
       order_id: order.id,
-      client_secret: paymentIntent.client_secret,
+      client_secret: paymentIntent.clientSecret,
       amount_cents: totalCents,
       discount_cents: discountCents,
     });

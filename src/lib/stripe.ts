@@ -14,7 +14,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   // Stripe SDK v20 uses the latest API version by default
   // Explicitly set for stability
-  apiVersion: "2025-04-30.basil",
+  apiVersion: "2025-11-17.clover",
   typescript: true,
 });
 

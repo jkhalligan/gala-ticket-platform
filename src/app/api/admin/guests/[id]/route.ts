@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -288,7 +289,7 @@ export async function PUT(
         action,
         entity_type: "GUEST_ASSIGNMENT",
         entity_id: id,
-        metadata,
+        metadata: metadata as Prisma.InputJsonValue,
       },
     });
 
