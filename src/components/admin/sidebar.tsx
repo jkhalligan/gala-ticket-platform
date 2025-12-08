@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Activity,
   Clock,
+  CreditCard,
   UserCircle,
   LogOut,
 } from "lucide-react";
@@ -22,6 +23,7 @@ const navItems = [
   { href: "/admin/tables", label: "Tables", icon: TableProperties },
   { href: "/admin/guests", label: "Guests", icon: Users },
   { href: "/admin/orders", label: "Orders", icon: ShoppingCart },
+  { href: "/admin/transactions", label: "Transactions", icon: CreditCard },
   { href: "/admin/invitations", label: "Invitations", icon: Mail },
   { href: "/admin/sync", label: "Sheets Sync", icon: RefreshCw },
   { href: "/admin/activity", label: "Activity Log", icon: Activity },
