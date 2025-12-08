@@ -3,6 +3,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { AdminSidebar } from "@/components/admin/sidebar";
 import { AdminHeader } from "@/components/admin/header";
 
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: "Admin Dashboard | Gala Platform",
 };
