@@ -142,6 +142,20 @@ export async function GET() {
             created_at: 'desc',
           },
         },
+        activity_logs: {
+          take: 20,
+          orderBy: {
+            created_at: 'desc',
+          },
+          select: {
+            id: true,
+            action: true,
+            entity_type: true,
+            entity_id: true,
+            metadata: true,
+            created_at: true,
+          },
+        },
       },
     });
 
@@ -177,6 +191,7 @@ export async function GET() {
       },
       recentAssignments: fullUser.guest_assignments,
       recentOrders: fullUser.orders,
+      recentActivity: fullUser.activity_logs,
       stats,
     });
   } catch (error) {

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Activity,
   Clock,
+  UserCircle,
   LogOut,
 } from "lucide-react";
 import type { AuthUser } from "@/lib/auth";
@@ -25,6 +26,7 @@ const navItems = [
   { href: "/admin/sync", label: "Sheets Sync", icon: RefreshCw },
   { href: "/admin/activity", label: "Activity Log", icon: Activity },
   { href: "/admin/waitlist", label: "Waitlist", icon: Clock },
+  { href: "/admin/account", label: "Account", icon: UserCircle },
 ];
 
 interface AdminSidebarProps {
