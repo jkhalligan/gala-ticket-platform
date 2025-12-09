@@ -26,12 +26,14 @@ export async function GET() {
         },
         table: {
           select: {
+            id: true,
             name: true,
             slug: true,
           },
         },
         event: {
           select: {
+            id: true,
             name: true,
           },
         },
@@ -55,11 +57,13 @@ export async function GET() {
         name,
         email: assignment.user.email,
         tier: assignment.tier,
+        tableId: assignment.table?.id || null,
         tableName: assignment.table?.name || null,
         tableSlug: assignment.table?.slug || null,
         checkedIn: assignment.checked_in_at !== null,
         checkedInAt: assignment.checked_in_at?.toISOString() || null,
         eventName: assignment.event.name,
+        eventId: assignment.event.id,
         auctionRegistered: assignment.auction_registered,
         bidderNumber: assignment.bidder_number,
         dietaryRestrictions: assignment.dietary_restrictions,
