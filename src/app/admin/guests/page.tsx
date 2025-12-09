@@ -3,13 +3,16 @@
 import * as React from "react";
 import Link from "next/link";
 import { ColumnDef } from "@tanstack/react-table";
-import { MoreHorizontal, Eye, Pencil, ArrowRightLeft, CheckCircle, XCircle, Maximize2 } from "lucide-react";
+import { MoreHorizontal, Eye, Pencil, ArrowRightLeft, CheckCircle, XCircle, Maximize2, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { DataTable, DataTableColumnHeader } from "@/components/admin/data-table";
 import { GuestQuickView } from "@/components/admin/quick-view";
+import { TableAssignmentCell } from "@/components/admin/table-assignment-cell";
+import { BulkAssignGuestsDialog } from "@/components/admin/bulk-assign-guests-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,11 +28,13 @@ interface GuestData {
   name: string;
   email: string;
   tier: "STANDARD" | "VIP" | "VVIP";
+  tableId: string | null;
   tableName: string | null;
   tableSlug: string | null;
   checkedIn: boolean;
   checkedInAt: string | null;
   eventName: string;
+  eventId: string;
   auctionRegistered: boolean;
   bidderNumber: string | null;
   dietaryRestrictions: any;
@@ -56,6 +61,13 @@ export default function GuestsPage() {
   // Quick View state
   const [quickViewOpen, setQuickViewOpen] = React.useState(false);
   const [selectedGuest, setSelectedGuest] = React.useState<{ id: string; name: string } | null>(null);
+
+  // Bulk assignment state
+  const [bulkAssignOpen, setBulkAssignOpen] = React.useState(false);
+  const [rowSelection, setRowSelection] = React.useState<Record<string, boolean>>({});
+
+  // Filter state
+  const [showUnassignedOnly, setShowUnassignedOnly] = React.useState(false);
 
   // Column visibility state with localStorage persistence
   const [columnVisibility, setColumnVisibility] = React.useState<Record<string, boolean>>({});
@@ -90,9 +102,59 @@ export default function GuestsPage() {
     setQuickViewOpen(true);
   }, []);
 
+  // Fetch guests helper
+  const fetchGuests = React.useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/guests");
+      if (response.ok) {
+        const data = await response.json();
+        setGuests(data.guests || []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch guests:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Get selected guest info for bulk operations
+  const selectedGuestIds = Object.keys(rowSelection).filter(id => rowSelection[id]);
+  const selectedGuestData = guests.filter(g => selectedGuestIds.includes(g.id));
+  const selectedGuestNames = selectedGuestData.map(g => g.name);
+
+  // Filtered guests for display
+  const filteredGuests = React.useMemo(() => {
+    if (!showUnassignedOnly) return guests;
+    return guests.filter(g => !g.tableName);
+  }, [guests, showUnassignedOnly]);
+
+  const unassignedCount = guests.filter(g => !g.tableName).length;
+
   // Column definitions - inside component to access handleQuickView
   const columns: ColumnDef<GuestData>[] = React.useMemo(
     () => [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <input
+            type="checkbox"
+            checked={table.getIsAllPageRowsSelected()}
+            onChange={(e) => table.toggleAllPageRowsSelected(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+        ),
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            checked={row.getIsSelected()}
+            onChange={(e) => row.toggleSelected(e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+      },
       {
         accessorKey: "name",
         header: ({ column }) => (
@@ -156,24 +218,23 @@ export default function GuestsPage() {
       },
       {
         accessorKey: "tableName",
+        id: "table_assignment",
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title="Table" />
+          <DataTableColumnHeader column={column} title="Table Assignment" />
         ),
         cell: ({ row }) => {
-          const tableName = row.getValue("tableName") as string | null;
-          const tableSlug = row.original.tableSlug;
-
-          if (!tableName) {
-            return <span className="text-muted-foreground italic">Unassigned</span>;
-          }
-
+          const guest = row.original;
           return (
-            <Link
-              href={`/admin/tables/${tableSlug}`}
-              className="text-primary hover:underline"
-            >
-              {tableName}
-            </Link>
+            <div className="min-w-[200px]">
+              <TableAssignmentCell
+                guestId={guest.id}
+                guestName={guest.name}
+                currentTableId={guest.tableId}
+                currentTableName={guest.tableName}
+                eventId={guest.eventId}
+                onAssignmentChange={fetchGuests}
+              />
+            </div>
           );
         },
       },
@@ -307,26 +368,12 @@ export default function GuestsPage() {
         },
       },
     ],
-    [handleQuickView]
+    [handleQuickView, fetchGuests]
   );
 
   React.useEffect(() => {
-    async function fetchGuests() {
-      try {
-        const response = await fetch("/api/admin/guests");
-        if (response.ok) {
-          const data = await response.json();
-          setGuests(data.guests || []);
-        }
-      } catch (error) {
-        console.error("Failed to fetch guests:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
     fetchGuests();
-  }, []);
+  }, [fetchGuests]);
 
   return (
     <div className="space-y-6">
@@ -335,15 +382,63 @@ export default function GuestsPage() {
         description="View and manage all guests across all tables"
       />
 
+      {/* Bulk Actions Toolbar */}
+      {selectedGuestIds.length > 0 && (
+        <div className="rounded-lg border bg-muted/50 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-muted-foreground" />
+              <span className="text-sm font-medium">
+                {selectedGuestIds.length} guest(s) selected
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRowSelection({})}
+              >
+                Clear Selection
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setBulkAssignOpen(true)}
+              >
+                Assign to Table
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unassigned Filter Toggle */}
+      <div className="flex items-center gap-2">
+        <Toggle
+          pressed={showUnassignedOnly}
+          onPressedChange={setShowUnassignedOnly}
+          variant="outline"
+          size="sm"
+        >
+          <span className="text-sm">Unassigned only</span>
+          {unassignedCount > 0 && (
+            <Badge variant="secondary" className="ml-2">
+              {unassignedCount}
+            </Badge>
+          )}
+        </Toggle>
+      </div>
+
       <DataTable
         columns={columns}
-        data={guests}
+        data={filteredGuests}
         searchKey="name"
         searchPlaceholder="Search guests..."
         isLoading={isLoading}
-        emptyMessage="No guests found."
+        emptyMessage={showUnassignedOnly ? "No unassigned guests found." : "No guests found."}
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={setColumnVisibility}
+        rowSelection={rowSelection}
+        onRowSelectionChange={setRowSelection}
       />
 
       <GuestQuickView
@@ -351,6 +446,18 @@ export default function GuestsPage() {
         guestName={selectedGuest?.name ?? ""}
         open={quickViewOpen}
         onOpenChange={setQuickViewOpen}
+      />
+
+      <BulkAssignGuestsDialog
+        open={bulkAssignOpen}
+        onOpenChange={setBulkAssignOpen}
+        selectedGuestIds={selectedGuestIds}
+        selectedGuestNames={selectedGuestNames}
+        eventId={selectedGuestData[0]?.eventId ?? ""}
+        onSuccess={() => {
+          setRowSelection({});
+          fetchGuests();
+        }}
       />
     </div>
   );

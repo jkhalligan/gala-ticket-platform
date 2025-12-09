@@ -58,6 +58,8 @@ interface DataTableProps<TData, TValue> {
   className?: string;
   columnVisibility?: VisibilityState;
   onColumnVisibilityChange?: React.Dispatch<React.SetStateAction<VisibilityState>>;
+  rowSelection?: Record<string, boolean>;
+  onRowSelectionChange?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
 }
 
 export function DataTable<TData, TValue>({
@@ -75,15 +77,21 @@ export function DataTable<TData, TValue>({
   className,
   columnVisibility: externalColumnVisibility,
   onColumnVisibilityChange: externalOnColumnVisibilityChange,
+  rowSelection: externalRowSelection,
+  onRowSelectionChange: externalOnRowSelectionChange,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [internalColumnVisibility, setInternalColumnVisibility] = React.useState<VisibilityState>({});
-  const [rowSelection, setRowSelection] = React.useState({});
+  const [internalRowSelection, setInternalRowSelection] = React.useState<Record<string, boolean>>({});
 
   // Use external column visibility if provided, otherwise use internal state
   const columnVisibility = externalColumnVisibility ?? internalColumnVisibility;
   const setColumnVisibility = externalOnColumnVisibilityChange ?? setInternalColumnVisibility;
+
+  // Use external row selection if provided, otherwise use internal state
+  const rowSelection = externalRowSelection ?? internalRowSelection;
+  const setRowSelection = externalOnRowSelectionChange ?? setInternalRowSelection;
 
   const table = useReactTable({
     data,

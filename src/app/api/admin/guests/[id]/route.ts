@@ -311,6 +311,122 @@ export async function PUT(
   }
 }
 
+// PATCH /api/admin/guests/[id] - Quick update for table assignment only
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const user = await getCurrentUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!user.isAdmin) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const { id } = await params;
+    const body = await request.json();
+    const { table_id } = body;
+
+    // Find the existing guest
+    const existingGuest = await prisma.guestAssignment.findUnique({
+      where: { id },
+      include: {
+        event: {
+          select: {
+            id: true,
+            organization_id: true,
+          },
+        },
+        table: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!existingGuest) {
+      return NextResponse.json({ error: "Guest not found" }, { status: 404 });
+    }
+
+    // If assigning to a table (not removing), validate it
+    if (table_id !== null) {
+      const newTable = await prisma.table.findUnique({
+        where: { id: table_id },
+        include: {
+          event: { select: { id: true } },
+          _count: { select: { guest_assignments: true } },
+        },
+      });
+
+      if (!newTable) {
+        return NextResponse.json(
+          { error: "Table not found" },
+          { status: 404 }
+        );
+      }
+
+      // Validate same event
+      if (newTable.event.id !== existingGuest.event_id) {
+        return NextResponse.json(
+          { error: "Table and guest must belong to the same event" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Update the guest's table assignment
+    const updatedGuest = await prisma.guestAssignment.update({
+      where: { id },
+      data: { table_id },
+      include: {
+        user: { select: { email: true, first_name: true, last_name: true } },
+        table: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    // Determine action and metadata
+    const metadata = {
+      fromTableId: existingGuest.table_id,
+      fromTableName: existingGuest.table?.name || "Unassigned",
+      toTableId: table_id,
+      toTableName: updatedGuest.table?.name || "Unassigned",
+    };
+
+    // Log the activity
+    await prisma.activityLog.create({
+      data: {
+        organization_id: existingGuest.event.organization_id,
+        event_id: existingGuest.event_id,
+        actor_id: user.id,
+        action: "GUEST_REASSIGNED",
+        entity_type: "GUEST_ASSIGNMENT",
+        entity_id: id,
+        metadata: metadata as Prisma.InputJsonValue,
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      guest: {
+        id: updatedGuest.id,
+        table: updatedGuest.table,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to update guest table assignment:", error);
+    return NextResponse.json(
+      { error: "Failed to update guest table assignment" },
+      { status: 500 }
+    );
+  }
+}
+
 // DELETE /api/admin/guests/[id] - Remove a guest assignment
 export async function DELETE(
   request: NextRequest,

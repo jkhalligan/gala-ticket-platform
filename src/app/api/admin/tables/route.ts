@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
 
@@ -14,10 +14,14 @@ export async function GET() {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    const searchParams = request.nextUrl.searchParams;
+    const includeCapacity = searchParams.get('include_capacity') === 'true';
+
     const tables = await prisma.table.findMany({
       include: {
         event: {
           select: {
+            id: true,
             name: true,
           },
         },
@@ -32,16 +36,40 @@ export async function GET() {
       },
     });
 
-    const formattedTables = tables.map((table) => ({
-      id: table.id,
-      name: table.name,
-      slug: table.slug,
-      type: table.type,
-      capacity: table.capacity,
-      filledSeats: table._count.guest_assignments,
-      status: table.status,
-      eventName: table.event.name,
-    }));
+    const formattedTables = tables.map((table) => {
+      const filledSeats = table._count.guest_assignments;
+      const percentageFilled = table.capacity > 0 ? (filledSeats / table.capacity) * 100 : 0;
+
+      let availability: "available" | "almost_full" | "at_capacity" = "available";
+      if (percentageFilled >= 100) {
+        availability = "at_capacity";
+      } else if (percentageFilled >= 70) {
+        availability = "almost_full";
+      }
+
+      const baseData = {
+        id: table.id,
+        name: table.name,
+        slug: table.slug,
+        type: table.type,
+        capacity: table.capacity,
+        filledSeats,
+        status: table.status,
+        eventId: table.event.id,
+        eventName: table.event.name,
+      };
+
+      if (includeCapacity) {
+        return {
+          ...baseData,
+          filled_seats: filledSeats,
+          availability,
+          percentage_filled: Math.round(percentageFilled),
+        };
+      }
+
+      return baseData;
+    });
 
     return NextResponse.json({ tables: formattedTables });
   } catch (error) {
