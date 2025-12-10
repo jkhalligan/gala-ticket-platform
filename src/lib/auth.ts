@@ -1,11 +1,12 @@
-// src/lib/auth.ts - COMPLETE VERSION
-// Includes all User fields from database schema
+// src/lib/auth.ts - FIXED VERSION (No undefined values)
+// Ensures all nullable fields are explicitly null, not undefined
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
 // Complete User type matching Prisma schema
+// Using explicit null instead of optional (no undefined)
 export type AuthUser = {
   id: string;
   supabase_auth_id: string;
@@ -13,13 +14,13 @@ export type AuthUser = {
   created_at: Date;
   updated_at: Date;
   
-  // Additional user fields from database
-  first_name?: string | null;
-  last_name?: string | null;
-  phone?: string | null;
+  // User profile fields - explicitly null, not undefined
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
   
   // Admin status (both formats for compatibility)
-  is_super_admin?: boolean;
+  is_super_admin: boolean;
   isAdmin: boolean;
   
   // Organization relationships
@@ -50,10 +51,10 @@ export function createDevUser(email: string): AuthUser {
     created_at: new Date(),
     updated_at: new Date(),
     
-    // Mock user profile
+    // Mock user profile - explicitly set to string values (not null)
     first_name: firstName.charAt(0).toUpperCase() + firstName.slice(1),
     last_name: lastName.charAt(0).toUpperCase() + lastName.slice(1),
-    phone: null,
+    phone: null, // Explicitly null
     
     // Admin status (both formats)
     is_super_admin: isAdmin,
@@ -171,8 +172,13 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     const isAdmin = user.organizationOwners.length > 0;
     const organizationIds = user.organizationMemberships.map(m => m.organization_id);
 
+    // Ensure all fields are present with explicit null instead of undefined
     return {
       ...user,
+      // Ensure nullable fields are null, not undefined
+      first_name: user.first_name ?? null,
+      last_name: user.last_name ?? null,
+      phone: user.phone ?? null,
       // Add computed properties
       is_super_admin: isAdmin,
       isAdmin,
