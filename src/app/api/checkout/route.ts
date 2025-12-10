@@ -205,11 +205,23 @@ export async function POST(request: NextRequest) {
         discount_cents: discountCents,
       });
 
+      // Get table slug if a table was created
+      let tableSlug: string | undefined;
+      if (result.table_id) {
+        const table = await prisma.table.findUnique({
+          where: { id: result.table_id },
+          select: { slug: true },
+        });
+        tableSlug = table?.slug;
+      }
+
       return NextResponse.json({
         success: true,
         requires_payment: false,
         order_id: result.order_id,
         table_id: result.table_id,
+        table_slug: tableSlug,
+        product_kind: product.kind,
       });
     }
 
@@ -260,6 +272,7 @@ export async function POST(request: NextRequest) {
       client_secret: paymentIntent.clientSecret,
       amount_cents: totalCents,
       discount_cents: discountCents,
+      product_kind: product.kind,
     });
 
   } catch (error) {

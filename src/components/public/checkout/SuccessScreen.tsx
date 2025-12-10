@@ -1,20 +1,30 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { Check, PartyPopper } from "lucide-react"
+import { Check, PartyPopper, Loader2 } from "lucide-react"
 import { formatCentsToDisplay } from "@/lib/stripe"
 import confetti from "canvas-confetti"
+import { TableSetupModal } from "@/components/dashboard/TableSetupModal"
 
 interface SuccessScreenProps {
-  orderId: string
+  orderId: string // This may be order ID or payment intent ID
   ticketType: "STANDARD" | "VIP" | "VVIP"
   quantity: number
   amountCents: number
   buyerEmail: string
   isTable?: boolean
   tableSlug?: string
+  productKind?: "INDIVIDUAL_TICKET" | "FULL_TABLE" | "CAPTAIN_COMMITMENT"
+}
+
+interface OrderData {
+  id: string
+  status: string
+  product_kind: string
+  table_slug: string | null
+  table_name: string | null
 }
 
 const tierLabels: Record<string, string> = {
@@ -30,9 +40,89 @@ export function SuccessScreen({
   amountCents,
   buyerEmail,
   isTable,
-  tableSlug,
+  tableSlug: initialTableSlug,
+  productKind: initialProductKind,
 }: SuccessScreenProps) {
-  const [countdown, setCountdown] = useState(10)
+  const [countdown, setCountdown] = useState(15)
+  const [orderData, setOrderData] = useState<OrderData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [showSetupModal, setShowSetupModal] = useState(false)
+  const [redirectTarget, setRedirectTarget] = useState<string>("/dashboard")
+
+  // Determine final values from either props or fetched data
+  const tableSlug = orderData?.table_slug || initialTableSlug
+  const productKind = orderData?.product_kind || initialProductKind
+  const isFullTable = productKind === "FULL_TABLE" || isTable
+
+  // Poll for order completion (webhook creates table async)
+  const pollForOrder = useCallback(async () => {
+    // If orderId looks like a payment intent (starts with "pi_"), poll by payment intent
+    const isPaymentIntent = orderId.startsWith("pi_")
+
+    if (!isPaymentIntent) {
+      // We have an actual order ID, just fetch it
+      try {
+        const res = await fetch(`/api/orders/${orderId}`)
+        if (res.ok) {
+          const data = await res.json()
+          setOrderData({
+            id: data.order.id,
+            status: data.order.status,
+            product_kind: data.order.product?.kind,
+            table_slug: data.order.table?.slug || null,
+            table_name: data.order.table?.name || null,
+          })
+          setLoading(false)
+        }
+      } catch (err) {
+        console.error("Error fetching order:", err)
+        setLoading(false)
+      }
+      return
+    }
+
+    // Poll by payment intent ID for webhook-processed orders
+    let attempts = 0
+    const maxAttempts = 20
+    const pollInterval = 1000 // 1 second
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/orders/by-payment-intent/${orderId}`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.order.status === "COMPLETED") {
+            setOrderData({
+              id: data.order.id,
+              status: data.order.status,
+              product_kind: data.order.product_kind,
+              table_slug: data.order.table_slug,
+              table_name: data.order.table_name,
+            })
+            setLoading(false)
+            return
+          }
+        }
+      } catch (err) {
+        console.error("Error polling for order:", err)
+      }
+
+      attempts++
+      if (attempts < maxAttempts) {
+        setTimeout(poll, pollInterval)
+      } else {
+        // Max attempts reached, stop loading but may not have full data
+        setLoading(false)
+      }
+    }
+
+    poll()
+  }, [orderId])
+
+  // Start polling on mount
+  useEffect(() => {
+    pollForOrder()
+  }, [pollForOrder])
 
   // Confetti effect on mount
   useEffect(() => {
@@ -62,14 +152,37 @@ export function SuccessScreen({
     frame()
   }, [])
 
-  // Countdown to redirect
+  // Determine redirect target based on product type
   useEffect(() => {
+    if (isFullTable && tableSlug) {
+      setRedirectTarget(`/dashboard/table/${tableSlug}`)
+    } else if (productKind === "INDIVIDUAL_TICKET") {
+      setRedirectTarget("/dashboard/tickets")
+    } else {
+      setRedirectTarget("/dashboard")
+    }
+  }, [isFullTable, tableSlug, productKind])
+
+  // Show setup modal for table purchases after data loaded
+  useEffect(() => {
+    if (!loading && isFullTable && tableSlug && !showSetupModal) {
+      // Delay modal slightly for better UX
+      const timer = setTimeout(() => {
+        setShowSetupModal(true)
+      }, 2000)
+      return () => clearTimeout(timer)
+    }
+  }, [loading, isFullTable, tableSlug, showSetupModal])
+
+  // Countdown to redirect (only if setup modal not shown)
+  useEffect(() => {
+    if (showSetupModal || loading) return // Don't countdown while modal is open
+
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer)
-          // Redirect to dashboard
-          window.location.href = "/dashboard"
+          window.location.href = redirectTarget
           return 0
         }
         return prev - 1
@@ -77,7 +190,22 @@ export function SuccessScreen({
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [])
+  }, [redirectTarget, showSetupModal, loading])
+
+  const handleSetupComplete = (newSlug?: string) => {
+    setShowSetupModal(false)
+    const finalSlug = newSlug || tableSlug
+    if (finalSlug) {
+      window.location.href = `/dashboard/table/${finalSlug}`
+    }
+  }
+
+  const handleSetupSkip = () => {
+    setShowSetupModal(false)
+    if (tableSlug) {
+      window.location.href = `/dashboard/table/${tableSlug}`
+    }
+  }
 
   return (
     <div className="text-center py-8">
@@ -99,12 +227,18 @@ export function SuccessScreen({
         <dl className="space-y-2 text-sm">
           <div className="flex justify-between">
             <dt className="text-gray-500">Order ID</dt>
-            <dd className="font-mono text-gray-900">{orderId.slice(-8).toUpperCase()}</dd>
+            <dd className="font-mono text-gray-900">
+              {(orderData?.id || orderId).slice(-8).toUpperCase()}
+            </dd>
           </div>
           <div className="flex justify-between">
-            <dt className="text-gray-500">Tickets</dt>
+            <dt className="text-gray-500">
+              {isFullTable ? "Table" : "Tickets"}
+            </dt>
             <dd className="text-gray-900">
-              {quantity}x {tierLabels[ticketType]}
+              {isFullTable
+                ? `${tierLabels[ticketType]} Table (${quantity} seats)`
+                : `${quantity}x ${tierLabels[ticketType]}`}
             </dd>
           </div>
           <div className="flex justify-between">
@@ -116,6 +250,14 @@ export function SuccessScreen({
         </dl>
       </div>
 
+      {/* Loading indicator while waiting for webhook */}
+      {loading && (
+        <div className="flex items-center justify-center gap-2 text-sm text-gray-500 mb-4">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>Setting up your {isFullTable ? "table" : "tickets"}...</span>
+        </div>
+      )}
+
       {/* Confirmation Email */}
       <p className="text-sm text-gray-600 mb-6">
         A confirmation email has been sent to{" "}
@@ -124,13 +266,22 @@ export function SuccessScreen({
 
       {/* Actions */}
       <div className="space-y-3">
-        {isTable && tableSlug ? (
-          <Link href={`/t/${tableSlug}`}>
+        {isFullTable && tableSlug ? (
+          <Link href={`/dashboard/table/${tableSlug}`}>
             <Button
               className="w-full max-w-xs bg-brand-primary hover:bg-brand-accent text-white"
               size="lg"
             >
               Manage Your Table
+            </Button>
+          </Link>
+        ) : productKind === "INDIVIDUAL_TICKET" ? (
+          <Link href="/dashboard/tickets">
+            <Button
+              className="w-full max-w-xs bg-brand-primary hover:bg-brand-accent text-white"
+              size="lg"
+            >
+              View Your Tickets
             </Button>
           </Link>
         ) : (
@@ -144,10 +295,21 @@ export function SuccessScreen({
           </Link>
         )}
 
-        <p className="text-xs text-gray-400">
-          Redirecting to dashboard in {countdown} seconds...
-        </p>
+        {!showSetupModal && (
+          <p className="text-xs text-gray-400">
+            Redirecting in {countdown} seconds...
+          </p>
+        )}
       </div>
+
+      {/* Table Setup Modal */}
+      {showSetupModal && tableSlug && (
+        <TableSetupModal
+          tableSlug={tableSlug}
+          onComplete={handleSetupComplete}
+          onSkip={handleSetupSkip}
+        />
+      )}
     </div>
   )
 }

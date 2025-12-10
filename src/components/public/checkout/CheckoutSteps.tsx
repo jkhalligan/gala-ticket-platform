@@ -287,6 +287,7 @@ export function CheckoutSteps({
               amountCents={amountCents}
               buyerEmail={data.buyer.email}
               isTable={data.format === "table"}
+              productKind={productKind}
             />
           )}
         </div>

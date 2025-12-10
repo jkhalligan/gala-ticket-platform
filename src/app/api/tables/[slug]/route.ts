@@ -22,7 +22,9 @@ import { z } from "zod";
 
 const TableUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  slug: z.string().min(3).max(50).regex(/^[a-z0-9-]+$/, "Slug must be lowercase alphanumeric with hyphens").optional(),
   internal_name: z.string().max(100).optional().nullable(),
+  welcome_message: z.string().max(1000).optional().nullable(),
   capacity: z.number().int().min(1).max(50).optional(),
   status: z.enum(["ACTIVE", "CLOSED", "ARCHIVED"]).optional(),
   custom_total_price_cents: z.number().int().min(0).optional().nullable(),
@@ -344,13 +346,31 @@ export async function PATCH(
 
     const updateData = parseResult.data;
 
-    // 5. Update table
+    // 5. Validate slug uniqueness if changing
+    if (updateData.slug && updateData.slug !== table.slug) {
+      const existingWithSlug = await prisma.table.findFirst({
+        where: {
+          slug: updateData.slug,
+          event_id: table.event_id,
+          id: { not: table.id },
+        },
+      });
+
+      if (existingWithSlug) {
+        return NextResponse.json(
+          { error: "This URL is already taken. Please choose a different one." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 6. Update table
     const updatedTable = await prisma.table.update({
       where: { id: table.id },
       data: updateData,
     });
 
-    // 6. Log activity
+    // 7. Log activity
     await prisma.activityLog.create({
       data: {
         organization_id: table.event.organization_id,
@@ -377,11 +397,15 @@ export async function PATCH(
         name: updatedTable.name,
         internal_name: updatedTable.internal_name,
         slug: updatedTable.slug,
+        welcome_message: updatedTable.welcome_message,
         type: updatedTable.type,
         capacity: updatedTable.capacity,
         status: updatedTable.status,
         updated_at: updatedTable.updated_at.toISOString(),
       },
+      // Include new slug if it changed (for redirect)
+      slug_changed: updateData.slug && updateData.slug !== slug,
+      new_slug: updateData.slug || slug,
     });
 
   } catch (error) {
