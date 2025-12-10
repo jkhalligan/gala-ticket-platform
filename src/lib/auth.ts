@@ -39,10 +39,60 @@ export type AuthUser = User & {
 };
 
 /**
+ * Check if dev auth bypass is enabled
+ */
+export function isAuthBypassEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ENABLE_AUTH_BYPASS === 'true';
+}
+
+/**
+ * Create a mock dev user for testing
+ */
+export function createDevUser(email: string): AuthUser {
+  const isAdmin = email.toLowerCase().includes('admin');
+  return {
+    id: `dev-user-${email}`,
+    supabase_auth_id: `dev-auth-${email}`,
+    email,
+    first_name: email.split('@')[0],
+    last_name: 'DevUser',
+    phone: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+    is_super_admin: isAdmin,
+    isAdmin,
+    organizationIds: isAdmin ? ['org-1'] : [],
+    organization_admins: [],
+    organization_owners: [],
+  } as unknown as AuthUser;
+}
+
+/**
  * Get the current authenticated user from Supabase session
  * and sync/fetch from Prisma database
  */
 export async function getCurrentUser(): Promise<AuthUser | null> {
+  // Dev bypass check (FIRST, before Supabase auth)
+  if (isAuthBypassEnabled()) {
+    try {
+      const { headers } = await import('next/headers');
+      const headersList = await headers();
+      const referer = headersList.get('referer') || '';
+
+      if (referer) {
+        const url = new URL(referer);
+        const devAuthEmail = url.searchParams.get('devAuth');
+
+        if (devAuthEmail && devAuthEmail.includes('@')) {
+          console.log('🔓 Dev auth bypass active:', devAuthEmail);
+          return createDevUser(devAuthEmail);
+        }
+      }
+    } catch (error) {
+      // Continue to normal auth
+    }
+  }
+
   try {
     const supabase = await getSupabaseServerClient();
     const { data: { session }, error } = await supabase.auth.getSession();
