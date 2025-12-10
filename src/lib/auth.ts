@@ -1,14 +1,14 @@
-// src/lib/auth.ts - SIMPLIFIED VERSION
-// Removed non-existent Prisma includes
+// src/lib/auth.ts - FINAL FIX
+// Handle nullable supabase_auth_id from database
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
-// Complete User type matching actual usage
+// Complete User type - all fields that can be null ARE nullable
 export type AuthUser = {
   id: string;
-  supabase_auth_id: string;
+  supabase_auth_id: string | null;  // Can be null in database
   email: string;
   created_at: Date;
   updated_at: Date;
@@ -152,12 +152,11 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     }
 
     // For now, check admin status from database field if it exists
-    // You can enhance this later with proper organization relationships
     const isAdmin = (user as any).is_super_admin || false;
 
     return {
       id: user.id,
-      supabase_auth_id: user.supabase_auth_id,
+      supabase_auth_id: user.supabase_auth_id ?? null,  // Handle null
       email: user.email,
       created_at: user.created_at,
       updated_at: user.updated_at,
@@ -166,7 +165,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       phone: user.phone ?? null,
       is_super_admin: isAdmin,
       isAdmin,
-      organizationIds: [] // Can be populated later from actual relationships
+      organizationIds: []
     };
   } catch (error) {
     console.error('Auth error:', error);
