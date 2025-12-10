@@ -1,65 +1,27 @@
-// src/lib/auth.ts - FINAL FIX
-// Handle nullable supabase_auth_id from database
+// src/lib/auth.ts - REAL USER LOOKUP VERSION
+// Looks up actual users by email for dev bypass
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
-// Complete User type - all fields that can be null ARE nullable
 export type AuthUser = {
   id: string;
-  supabase_auth_id: string | null;  // Can be null in database
+  supabase_auth_id: string | null;
   email: string;
   created_at: Date;
   updated_at: Date;
-  
-  // User profile fields
   first_name: string | null;
   last_name: string | null;
   phone: string | null;
-  
-  // Admin status (both formats for compatibility)
   is_super_admin: boolean;
   isAdmin: boolean;
-  
-  // Simplified - no complex includes
   organizationIds: string[];
 };
 
 // =============================================================================
 // DEV AUTH BYPASS FUNCTIONS
 // =============================================================================
-
-export function createDevUser(email: string): AuthUser {
-  const isAdmin = email.toLowerCase().includes('admin');
-  
-  // Extract name from email for display
-  const emailPrefix = email.split('@')[0];
-  const nameParts = emailPrefix.split(/[._-]/);
-  const firstName = nameParts[0] || 'Dev';
-  const lastName = nameParts[1] || 'User';
-  
-  console.log('🔓 Creating dev user:', { email, isAdmin, firstName, lastName });
-  
-  return {
-    id: `dev-user-${email}`,
-    supabase_auth_id: `dev-auth-${email}`,
-    email,
-    created_at: new Date(),
-    updated_at: new Date(),
-    
-    // Mock user profile
-    first_name: firstName.charAt(0).toUpperCase() + firstName.slice(1),
-    last_name: lastName.charAt(0).toUpperCase() + lastName.slice(1),
-    phone: null,
-    
-    // Admin status
-    is_super_admin: isAdmin,
-    isAdmin: isAdmin,
-    
-    organizationIds: isAdmin ? ['org-1'] : []
-  };
-}
 
 async function getDevAuthEmail(): Promise<string | null> {
   try {
@@ -74,6 +36,73 @@ async function getDevAuthEmail(): Promise<string | null> {
   }
   
   return null;
+}
+
+async function getDevUserByEmail(email: string): Promise<AuthUser | null> {
+  try {
+    console.log('🔓 Dev bypass: Looking up real user by email:', email);
+    
+    // Look up the REAL user in database by email
+    const user = await prisma.user.findFirst({
+      where: { email }
+    });
+    
+    if (user) {
+      console.log('✅ Found real user:', { id: user.id, email: user.email });
+      
+      // Check admin status
+      const isAdmin = (user as any).is_super_admin || false;
+      
+      // Return the REAL user data
+      return {
+        id: user.id,                                    // ← Real ID from database!
+        supabase_auth_id: user.supabase_auth_id ?? null,
+        email: user.email,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        first_name: user.first_name ?? null,
+        last_name: user.last_name ?? null,
+        phone: user.phone ?? null,
+        is_super_admin: isAdmin,
+        isAdmin,
+        organizationIds: []
+      };
+    }
+    
+    // User doesn't exist in database - create mock for testing
+    console.log('⚠️  User not found in database, creating mock user for testing');
+    return createMockUser(email);
+    
+  } catch (error) {
+    console.error('Error looking up dev user:', error);
+    return createMockUser(email);
+  }
+}
+
+function createMockUser(email: string): AuthUser {
+  const isAdmin = email.toLowerCase().includes('admin');
+  
+  // Extract name from email for display
+  const emailPrefix = email.split('@')[0];
+  const nameParts = emailPrefix.split(/[._-]/);
+  const firstName = nameParts[0] || 'Dev';
+  const lastName = nameParts[1] || 'User';
+  
+  console.log('🔓 Creating mock user (not in database):', { email, isAdmin });
+  
+  return {
+    id: `dev-user-${email}`,  // Fake ID (won't find real data)
+    supabase_auth_id: `dev-auth-${email}`,
+    email,
+    created_at: new Date(),
+    updated_at: new Date(),
+    first_name: firstName.charAt(0).toUpperCase() + firstName.slice(1),
+    last_name: lastName.charAt(0).toUpperCase() + lastName.slice(1),
+    phone: null,
+    is_super_admin: isAdmin,
+    isAdmin: isAdmin,
+    organizationIds: isAdmin ? ['org-1'] : []
+  };
 }
 
 // =============================================================================
@@ -110,8 +139,8 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   const devAuthEmail = await getDevAuthEmail();
   
   if (devAuthEmail) {
-    console.log('🔓 Auth: Using dev bypass for', devAuthEmail);
-    return createDevUser(devAuthEmail);
+    console.log('🔓 Auth: Dev bypass active, looking up user by email');
+    return await getDevUserByEmail(devAuthEmail);
   }
   
   // ========================================
@@ -127,7 +156,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
     const supabaseUser = session.user;
 
-    // Find or create user in Prisma - simplified query
+    // Find or create user in Prisma
     let user = await prisma.user.findFirst({
       where: {
         OR: [
@@ -151,12 +180,12 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       return null;
     }
 
-    // For now, check admin status from database field if it exists
+    // Check admin status
     const isAdmin = (user as any).is_super_admin || false;
 
     return {
       id: user.id,
-      supabase_auth_id: user.supabase_auth_id ?? null,  // Handle null
+      supabase_auth_id: user.supabase_auth_id ?? null,
       email: user.email,
       created_at: user.created_at,
       updated_at: user.updated_at,
