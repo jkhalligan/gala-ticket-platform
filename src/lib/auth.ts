@@ -1,16 +1,22 @@
-// src/lib/auth.ts - FIXED VERSION
-// Reads devAuth from cookie set by middleware
+// src/lib/auth.ts - CORRECTED VERSION
+// Fixed AuthUser type to match your database schema
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
+// Match your existing User type from Prisma
 export type AuthUser = {
   id: string;
   supabase_auth_id: string;
   email: string;
   created_at: Date;
   updated_at: Date;
+  
+  // Database uses snake_case
+  is_super_admin?: boolean;
+  
+  // For backwards compatibility, also include camelCase
   isAdmin: boolean;
   organizationIds: string[];
   organizationMemberships?: any[];
@@ -32,7 +38,11 @@ export function createDevUser(email: string): AuthUser {
     email,
     created_at: new Date(),
     updated_at: new Date(),
-    isAdmin,
+    
+    // Set both formats for compatibility
+    is_super_admin: isAdmin,
+    isAdmin: isAdmin,
+    
     organizationIds: isAdmin ? ['org-1'] : [],
     organizationMemberships: [],
     organizationOwners: []
@@ -141,12 +151,14 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       return null;
     }
 
-    // Check if user is admin
+    // Check if user is admin (from organizationOwners)
     const isAdmin = user.organizationOwners.length > 0;
     const organizationIds = user.organizationMemberships.map(m => m.organization_id);
 
     return {
       ...user,
+      // Add computed properties
+      is_super_admin: isAdmin,
       isAdmin,
       organizationIds
     };
@@ -243,7 +255,8 @@ export function withAdmin<T>(
         return Response.json({ error: 'Unauthorized' }, { status: 401 });
       }
 
-      if (!user.isAdmin) {
+      // Check both formats for admin
+      if (!user.isAdmin && !user.is_super_admin) {
         return Response.json({ error: 'Forbidden: Admin access required' }, { status: 403 });
       }
 
