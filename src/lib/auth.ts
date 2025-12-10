@@ -1,10 +1,58 @@
-// src/lib/auth.ts
-// Authentication helpers for Supabase Auth + Prisma User sync
+// src/lib/auth.ts - FIXED VERSION
+// Reads devAuth from cookie set by middleware
 
+import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/auth-helpers-nextjs';
-import { prisma } from './prisma';
-import type { User } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
+
+export type AuthUser = {
+  id: string;
+  supabase_auth_id: string;
+  email: string;
+  created_at: Date;
+  updated_at: Date;
+  isAdmin: boolean;
+  organizationIds: string[];
+  organizationMemberships?: any[];
+  organizationOwners?: any[];
+};
+
+// =============================================================================
+// DEV AUTH BYPASS FUNCTIONS
+// =============================================================================
+
+export function createDevUser(email: string): AuthUser {
+  const isAdmin = email.toLowerCase().includes('admin');
+  
+  console.log('🔓 Creating dev user:', { email, isAdmin });
+  
+  return {
+    id: `dev-user-${email}`,
+    supabase_auth_id: `dev-auth-${email}`,
+    email,
+    created_at: new Date(),
+    updated_at: new Date(),
+    isAdmin,
+    organizationIds: isAdmin ? ['org-1'] : [],
+    organizationMemberships: [],
+    organizationOwners: []
+  };
+}
+
+async function getDevAuthEmail(): Promise<string | null> {
+  try {
+    const cookieStore = await cookies();
+    const devAuthCookie = cookieStore.get('dev-auth-email');
+    
+    if (devAuthCookie?.value) {
+      return devAuthCookie.value;
+    }
+  } catch (error) {
+    console.error('Error reading dev auth cookie:', error);
+  }
+  
+  return null;
+}
 
 // =============================================================================
 // SUPABASE CLIENT
@@ -19,8 +67,8 @@ export async function getSupabaseServerClient() {
     {
       cookies: {
         getAll: () => cookieStore.getAll(),
-        setAll: (cookiesToSet) => {
-          cookiesToSet.forEach(({ name, value, options }) => {
+        setAll: (cookies) => {
+          cookies.forEach(({ name, value, options }) => {
             cookieStore.set(name, value, options);
           });
         },
@@ -30,69 +78,23 @@ export async function getSupabaseServerClient() {
 }
 
 // =============================================================================
-// SESSION & USER SYNC
+// CURRENT USER - WITH DEV BYPASS
 // =============================================================================
 
-export type AuthUser = User & {
-  isAdmin: boolean;
-  organizationIds: string[];
-};
-
-/**
- * Check if dev auth bypass is enabled
- */
-export function isAuthBypassEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_ENABLE_AUTH_BYPASS === 'true';
-}
-
-/**
- * Create a mock dev user for testing
- */
-export function createDevUser(email: string): AuthUser {
-  const isAdmin = email.toLowerCase().includes('admin');
-  return {
-    id: `dev-user-${email}`,
-    supabase_auth_id: `dev-auth-${email}`,
-    email,
-    first_name: email.split('@')[0],
-    last_name: 'DevUser',
-    phone: null,
-    created_at: new Date(),
-    updated_at: new Date(),
-    is_super_admin: isAdmin,
-    isAdmin,
-    organizationIds: isAdmin ? ['org-1'] : [],
-    organization_admins: [],
-    organization_owners: [],
-  } as unknown as AuthUser;
-}
-
-/**
- * Get the current authenticated user from Supabase session
- * and sync/fetch from Prisma database
- */
 export async function getCurrentUser(): Promise<AuthUser | null> {
-  // Dev bypass check (FIRST, before Supabase auth)
-  if (isAuthBypassEnabled()) {
-    try {
-      const { headers } = await import('next/headers');
-      const headersList = await headers();
-      const referer = headersList.get('referer') || '';
-
-      if (referer) {
-        const url = new URL(referer);
-        const devAuthEmail = url.searchParams.get('devAuth');
-
-        if (devAuthEmail && devAuthEmail.includes('@')) {
-          console.log('🔓 Dev auth bypass active:', devAuthEmail);
-          return createDevUser(devAuthEmail);
-        }
-      }
-    } catch (error) {
-      // Continue to normal auth
-    }
+  // ========================================
+  // TRY DEV BYPASS FIRST
+  // ========================================
+  const devAuthEmail = await getDevAuthEmail();
+  
+  if (devAuthEmail) {
+    console.log('🔓 Auth: Using dev bypass for', devAuthEmail);
+    return createDevUser(devAuthEmail);
   }
-
+  
+  // ========================================
+  // NORMAL SUPABASE AUTH
+  // ========================================
   try {
     const supabase = await getSupabaseServerClient();
     const { data: { session }, error } = await supabase.auth.getSession();
@@ -108,91 +110,50 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       where: {
         OR: [
           { supabase_auth_id: supabaseUser.id },
-          { email: supabaseUser.email! },
-        ],
+          { email: supabaseUser.email! }
+        ]
       },
       include: {
-        organization_admins: {
-          select: { organization_id: true },
+        organizationMemberships: {
+          include: { organization: true }
         },
-      },
+        organizationOwners: true
+      }
     });
 
-    if (!user) {
-      // Create new user on first login
+    if (!user && supabaseUser.email) {
+      // Create new user
       user = await prisma.user.create({
         data: {
-          email: supabaseUser.email!,
           supabase_auth_id: supabaseUser.id,
-          first_name: supabaseUser.user_metadata?.first_name || null,
-          last_name: supabaseUser.user_metadata?.last_name || null,
+          email: supabaseUser.email,
         },
         include: {
-          organization_admins: {
-            select: { organization_id: true },
+          organizationMemberships: {
+            include: { organization: true }
           },
-        },
-      });
-    } else if (!user.supabase_auth_id) {
-      // Link existing user (created via guest assignment) to Supabase auth
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { supabase_auth_id: supabaseUser.id },
-        include: {
-          organization_admins: {
-            select: { organization_id: true },
-          },
-        },
+          organizationOwners: true
+        }
       });
     }
 
+    if (!user) {
+      return null;
+    }
+
+    // Check if user is admin
+    const isAdmin = user.organizationOwners.length > 0;
+    const organizationIds = user.organizationMemberships.map(m => m.organization_id);
+
     return {
       ...user,
-      isAdmin: user.is_super_admin || user.organization_admins.length > 0,
-      organizationIds: user.organization_admins.map((oa) => oa.organization_id),
+      isAdmin,
+      organizationIds
     };
   } catch (error) {
-    console.error('Error getting current user:', error);
+    console.error('Auth error:', error);
     return null;
   }
-}
-
-/**
- * Require authentication - throws if not authenticated
- */
-export async function requireAuth(): Promise<AuthUser> {
-  const user = await getCurrentUser();
-  if (!user) {
-    throw new Error('Unauthorized');
-  }
-  return user;
-}
-
-/**
- * Require admin role - throws if not admin
- */
-export async function requireAdmin(): Promise<AuthUser> {
-  const user = await requireAuth();
-  if (!user.isAdmin) {
-    throw new Error('Forbidden: Admin access required');
-  }
-  return user;
-}
-
-/**
- * Check if user is admin for a specific organization
- */
-export async function isOrgAdmin(userId: string, organizationId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      organization_admins: {
-        where: { organization_id: organizationId },
-      },
-    },
-  });
-
-  return user?.is_super_admin || (user?.organization_admins.length ?? 0) > 0;
 }
 
 // =============================================================================
@@ -224,6 +185,10 @@ export async function signOut() {
     throw error;
   }
 
+  // Also clear dev auth cookie
+  const cookieStore = await cookies();
+  cookieStore.delete('dev-auth-email');
+
   return { success: true };
 }
 
@@ -231,9 +196,6 @@ export async function signOut() {
 // API ROUTE HELPERS
 // =============================================================================
 
-/**
- * Wrapper for protected API routes
- */
 export function withAuth<T>(
   handler: (user: AuthUser, request: Request) => Promise<T>
 ) {
@@ -270,9 +232,6 @@ export function withAuth<T>(
   };
 }
 
-/**
- * Wrapper for admin-only API routes
- */
 export function withAdmin<T>(
   handler: (user: AuthUser, request: Request) => Promise<T>
 ) {
