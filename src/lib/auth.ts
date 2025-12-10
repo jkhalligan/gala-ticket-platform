@@ -1,11 +1,11 @@
-// src/lib/auth.ts - CORRECTED VERSION
-// Fixed AuthUser type to match your database schema
+// src/lib/auth.ts - COMPLETE VERSION
+// Includes all User fields from database schema
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 
-// Match your existing User type from Prisma
+// Complete User type matching Prisma schema
 export type AuthUser = {
   id: string;
   supabase_auth_id: string;
@@ -13,11 +13,16 @@ export type AuthUser = {
   created_at: Date;
   updated_at: Date;
   
-  // Database uses snake_case
-  is_super_admin?: boolean;
+  // Additional user fields from database
+  first_name?: string | null;
+  last_name?: string | null;
+  phone?: string | null;
   
-  // For backwards compatibility, also include camelCase
+  // Admin status (both formats for compatibility)
+  is_super_admin?: boolean;
   isAdmin: boolean;
+  
+  // Organization relationships
   organizationIds: string[];
   organizationMemberships?: any[];
   organizationOwners?: any[];
@@ -30,7 +35,13 @@ export type AuthUser = {
 export function createDevUser(email: string): AuthUser {
   const isAdmin = email.toLowerCase().includes('admin');
   
-  console.log('🔓 Creating dev user:', { email, isAdmin });
+  // Extract name from email for display
+  const emailPrefix = email.split('@')[0];
+  const nameParts = emailPrefix.split(/[._-]/);
+  const firstName = nameParts[0] || 'Dev';
+  const lastName = nameParts[1] || 'User';
+  
+  console.log('🔓 Creating dev user:', { email, isAdmin, firstName, lastName });
   
   return {
     id: `dev-user-${email}`,
@@ -39,7 +50,12 @@ export function createDevUser(email: string): AuthUser {
     created_at: new Date(),
     updated_at: new Date(),
     
-    // Set both formats for compatibility
+    // Mock user profile
+    first_name: firstName.charAt(0).toUpperCase() + firstName.slice(1),
+    last_name: lastName.charAt(0).toUpperCase() + lastName.slice(1),
+    phone: null,
+    
+    // Admin status (both formats)
     is_super_admin: isAdmin,
     isAdmin: isAdmin,
     
