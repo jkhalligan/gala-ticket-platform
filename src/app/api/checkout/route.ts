@@ -121,19 +121,34 @@ export async function POST(request: NextRequest) {
       discount_type?: string;
       discount_value?: number;
     } = { valid: true, promo_code_id: undefined, discount_cents: 0 };
+
+    // Calculate subtotal based on product kind
+    let subtotalCents: number;
+    if (product.kind === 'FULL_TABLE') {
+      // For full table purchases, price_cents is the TOTAL table price
+      // DO NOT multiply by quantity (seats are included in the price)
+      subtotalCents = product.price_cents;
+      console.log(`💰 Full table pricing: $${product.price_cents / 100} total (includes ${data.quantity} seats)`);
+    } else {
+      // For individual tickets, price_cents is per-seat
+      // Multiply by quantity
+      subtotalCents = product.price_cents * data.quantity;
+      console.log(`💰 Individual ticket pricing: $${product.price_cents / 100} × ${data.quantity} = $${subtotalCents / 100}`);
+    }
+
     if (data.promo_code) {
-      const subtotal = product.price_cents * data.quantity;
-      promoValidation = await validatePromoCode(data.promo_code, data.event_id, subtotal);
-      
+      promoValidation = await validatePromoCode(data.promo_code, data.event_id, subtotalCents);
+
       if (!promoValidation.valid) {
         return NextResponse.json({ error: promoValidation.error }, { status: 400 });
       }
     }
 
     // 7. Calculate final amount
-    const subtotalCents = product.price_cents * data.quantity;
     const discountCents = promoValidation.discount_cents;
     const totalCents = Math.max(0, subtotalCents - discountCents);
+
+    console.log(`💳 Final amount: $${totalCents / 100} (subtotal: $${subtotalCents / 100}, discount: $${discountCents / 100})`);
 
     // 8. Handle $0 orders (captain commitment or fully discounted)
     if (totalCents === 0) {

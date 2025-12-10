@@ -6,16 +6,64 @@
 // =============================================================================
 
 import Stripe from "stripe";
+import { loadStripe, type Stripe as StripeClient } from "@stripe/stripe-js";
 
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error("STRIPE_SECRET_KEY environment variable is not set");
+// =============================================================================
+// Client-side Stripe (for React components)
+// =============================================================================
+
+let stripePromise: Promise<StripeClient | null> | null = null;
+
+/**
+ * Get Stripe.js instance for client-side use
+ * Singleton pattern - only loads once
+ */
+export function getStripePromise(): Promise<StripeClient | null> {
+  if (!stripePromise) {
+    const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+
+    if (!publishableKey) {
+      console.error('Missing NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY');
+      return Promise.resolve(null);
+    }
+
+    stripePromise = loadStripe(publishableKey);
+  }
+
+  return stripePromise;
 }
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  // Stripe SDK v20 uses the latest API version by default
-  // Explicitly set for stability
-  apiVersion: "2025-11-17.clover",
-  typescript: true,
+// =============================================================================
+// Server-side Stripe
+// =============================================================================
+
+// Server-side Stripe client - only initialized on the server
+// Using a lazy initialization pattern to avoid client-side errors
+let _stripe: Stripe | null = null;
+
+function getServerStripe(): Stripe {
+  if (typeof window !== "undefined") {
+    throw new Error("Server Stripe client cannot be used on the client side");
+  }
+
+  if (!_stripe) {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      throw new Error("STRIPE_SECRET_KEY environment variable is not set");
+    }
+    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: "2025-11-17.clover",
+      typescript: true,
+    });
+  }
+
+  return _stripe;
+}
+
+// Export getter for server-side usage
+export const stripe = new Proxy({} as Stripe, {
+  get(_, prop) {
+    return getServerStripe()[prop as keyof Stripe];
+  },
 });
 
 // =============================================================================
