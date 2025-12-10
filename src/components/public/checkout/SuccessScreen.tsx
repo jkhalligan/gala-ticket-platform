@@ -154,14 +154,17 @@ export function SuccessScreen({
 
   // Determine redirect target based on product type
   useEffect(() => {
+    // Add devAuth parameter for development/testing
+    const devAuthParam = `?devAuth=${encodeURIComponent(buyerEmail)}`
+
     if (isFullTable && tableSlug) {
-      setRedirectTarget(`/dashboard/table/${tableSlug}`)
+      setRedirectTarget(`/dashboard/table/${tableSlug}${devAuthParam}`)
     } else if (productKind === "INDIVIDUAL_TICKET") {
-      setRedirectTarget("/dashboard/tickets")
+      setRedirectTarget(`/dashboard/tickets${devAuthParam}`)
     } else {
-      setRedirectTarget("/dashboard")
+      setRedirectTarget(`/dashboard${devAuthParam}`)
     }
-  }, [isFullTable, tableSlug, productKind])
+  }, [isFullTable, tableSlug, productKind, buyerEmail])
 
   // Show setup modal for table purchases after data loaded
   useEffect(() => {
@@ -196,14 +199,16 @@ export function SuccessScreen({
     setShowSetupModal(false)
     const finalSlug = newSlug || tableSlug
     if (finalSlug) {
-      window.location.href = `/dashboard/table/${finalSlug}`
+      const devAuthParam = `?devAuth=${encodeURIComponent(buyerEmail)}`
+      window.location.href = `/dashboard/table/${finalSlug}${devAuthParam}`
     }
   }
 
   const handleSetupSkip = () => {
     setShowSetupModal(false)
     if (tableSlug) {
-      window.location.href = `/dashboard/table/${tableSlug}`
+      const devAuthParam = `?devAuth=${encodeURIComponent(buyerEmail)}`
+      window.location.href = `/dashboard/table/${tableSlug}${devAuthParam}`
     }
   }
 
@@ -267,7 +272,7 @@ export function SuccessScreen({
       {/* Actions */}
       <div className="space-y-3">
         {isFullTable && tableSlug ? (
-          <Link href={`/dashboard/table/${tableSlug}`}>
+          <Link href={`/dashboard/table/${tableSlug}?devAuth=${encodeURIComponent(buyerEmail)}`}>
             <Button
               className="w-full max-w-xs bg-brand-primary hover:bg-brand-accent text-white"
               size="lg"
@@ -276,7 +281,7 @@ export function SuccessScreen({
             </Button>
           </Link>
         ) : productKind === "INDIVIDUAL_TICKET" ? (
-          <Link href="/dashboard/tickets">
+          <Link href={`/dashboard/tickets?devAuth=${encodeURIComponent(buyerEmail)}`}>
             <Button
               className="w-full max-w-xs bg-brand-primary hover:bg-brand-accent text-white"
               size="lg"
@@ -285,7 +290,7 @@ export function SuccessScreen({
             </Button>
           </Link>
         ) : (
-          <Link href="/dashboard">
+          <Link href={`/dashboard?devAuth=${encodeURIComponent(buyerEmail)}`}>
             <Button
               className="w-full max-w-xs bg-brand-primary hover:bg-brand-accent text-white"
               size="lg"
