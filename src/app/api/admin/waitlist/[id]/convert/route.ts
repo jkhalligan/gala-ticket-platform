@@ -89,14 +89,19 @@ export async function POST(
     const paymentLinkToken = randomBytes(32).toString("hex");
     const expiresAt = addDays(new Date(), 7);
 
+    // Calculate amount based on product kind (same logic as checkout)
+    const amountCents = product.kind === 'FULL_TABLE'
+      ? product.price_cents
+      : product.price_cents * entry.quantity;
+
     const order = await prisma.order.create({
       data: {
         event_id: entry.event_id,
         user_id: targetUser.id,
         product_id: product.id,
         quantity: entry.quantity,
-        amount_cents: product.price_cents * entry.quantity,
-        custom_price_cents: product.price_cents * entry.quantity,
+        amount_cents: amountCents,
+        custom_price_cents: amountCents,
         status: "AWAITING_PAYMENT",
         is_admin_created: true,
         invited_email: email,

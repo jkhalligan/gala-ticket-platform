@@ -30,6 +30,7 @@ export default async function CheckoutPage({ searchParams }: CheckoutPageProps) 
   // Fetch event and product from database
   let eventId = ""
   let productId = ""
+  let productKind: "INDIVIDUAL_TICKET" | "FULL_TABLE" | "CAPTAIN_COMMITMENT" = "INDIVIDUAL_TICKET"
   let pricePerTicket = FALLBACK_PRICES[tier]
   let eventName = "Pink Gala 50th Anniversary"
   let eventDate = "February 22, 2025"
@@ -63,6 +64,7 @@ export default async function CheckoutPage({ searchParams }: CheckoutPageProps) 
 
       if (event.products[0]) {
         productId = event.products[0].id
+        productKind = event.products[0].kind as "INDIVIDUAL_TICKET" | "FULL_TABLE" | "CAPTAIN_COMMITMENT"
         pricePerTicket = event.products[0].price_cents
       }
     }
@@ -129,6 +131,7 @@ export default async function CheckoutPage({ searchParams }: CheckoutPageProps) 
         <CheckoutSteps
           eventId={eventId}
           productId={productId}
+          productKind={productKind}
           ticketType={tier}
           format={type as "individual" | "table"}
           mode={mode}

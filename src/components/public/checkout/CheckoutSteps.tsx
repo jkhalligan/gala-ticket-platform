@@ -8,6 +8,10 @@ import { Step2_GuestChoice } from "./Step2_GuestChoice"
 import { Step3_GuestDetails } from "./Step3_GuestDetails"
 import { Step4_Payment } from "./Step4_Payment"
 import { SuccessScreen } from "./SuccessScreen"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Plus, Minus } from "lucide-react"
 
 type CheckoutStep = 1 | 2 | 3 | 4 | "success"
 
@@ -44,6 +48,7 @@ interface CheckoutData {
 interface CheckoutStepsProps {
   eventId: string
   productId: string
+  productKind: "INDIVIDUAL_TICKET" | "FULL_TABLE" | "CAPTAIN_COMMITMENT"
   ticketType: "STANDARD" | "VIP" | "VVIP"
   format: "individual" | "table"
   mode?: "host" | "captain"
@@ -56,6 +61,7 @@ interface CheckoutStepsProps {
 export function CheckoutSteps({
   eventId,
   productId,
+  productKind,
   ticketType,
   format,
   mode,
@@ -71,7 +77,9 @@ export function CheckoutSteps({
     ticketType,
     format,
     mode,
-    quantity: format === "table" ? 10 : quantity,
+    // For FULL_TABLE, quantity must be 1 (price includes all seats)
+    // For individual tickets, use provided quantity
+    quantity: productKind === "FULL_TABLE" ? 1 : quantity,
     pricePerTicket,
     eventId,
     productId,
@@ -81,9 +89,19 @@ export function CheckoutSteps({
     tableInfo: undefined,
   })
 
-  // Calculate actual quantity for pricing
-  const actualQuantity = format === "table" ? 10 : data.quantity
-  const amountCents = pricePerTicket * actualQuantity
+  // Calculate amount based on product kind (matches backend logic)
+  let amountCents: number
+  let displayQuantity: number
+
+  if (productKind === "FULL_TABLE") {
+    // For full tables, price_cents is the TOTAL (don't multiply)
+    amountCents = pricePerTicket
+    displayQuantity = 10 // For display purposes only (seats included)
+  } else {
+    // For individual tickets, multiply by quantity
+    displayQuantity = data.quantity
+    amountCents = pricePerTicket * displayQuantity
+  }
 
   const nextStep = () => {
     if (step === 2 && data.guestChoice === "send-later") {
@@ -138,6 +156,85 @@ export function CheckoutSteps({
           />
         )}
 
+        {/* Quantity Selector - Show before starting checkout */}
+        {step === 1 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-6 mb-4">
+            {productKind === "INDIVIDUAL_TICKET" ? (
+              <div className="space-y-3">
+                <Label htmlFor="quantity" className="text-base font-medium">
+                  Number of Tickets
+                </Label>
+
+                <div className="flex items-center gap-3">
+                  {/* Decrement Button */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => {
+                      const newQty = Math.max(1, data.quantity - 1)
+                      setData({ ...data, quantity: newQty })
+                    }}
+                    disabled={data.quantity <= 1}
+                    aria-label="Decrease quantity"
+                    className="h-10 w-10 md:h-9 md:w-9"
+                  >
+                    <Minus className="h-5 w-5 md:h-4 md:w-4" />
+                  </Button>
+
+                  {/* Numeric Input */}
+                  <Input
+                    id="quantity"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={data.quantity}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value, 10)
+                      if (!isNaN(value) && value >= 1 && value <= 10) {
+                        setData({ ...data, quantity: value })
+                      }
+                    }}
+                    className="w-20 md:w-24 text-center text-lg md:text-base"
+                    aria-describedby="quantity-description"
+                    aria-label="Number of tickets to purchase"
+                  />
+
+                  {/* Increment Button */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => {
+                      const newQty = Math.min(10, data.quantity + 1)
+                      setData({ ...data, quantity: newQty })
+                    }}
+                    disabled={data.quantity >= 10}
+                    aria-label="Increase quantity"
+                    className="h-10 w-10 md:h-9 md:w-9"
+                  >
+                    <Plus className="h-5 w-5 md:h-4 md:w-4" />
+                  </Button>
+                </div>
+
+                <p
+                  id="quantity-description"
+                  className="text-sm text-muted-foreground"
+                >
+                  Select between 1 and 10 tickets
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border bg-muted/50 p-4">
+                <p className="text-sm font-medium text-gray-900">Table Purchase</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  You are purchasing 1 table that includes 10 seats
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           {step === 1 && (
             <Step1_BuyerInfo
@@ -149,7 +246,7 @@ export function CheckoutSteps({
           {step === 2 && (
             <Step2_GuestChoice
               initialChoice={data.guestChoice}
-              quantity={actualQuantity}
+              quantity={displayQuantity}
               onNext={handleGuestChoiceNext}
               onBack={prevStep}
             />
@@ -158,7 +255,7 @@ export function CheckoutSteps({
           {step === 3 && (
             <Step3_GuestDetails
               initialGuests={data.guests}
-              quantity={actualQuantity}
+              quantity={displayQuantity}
               buyerInfo={data.buyer}
               onNext={handleGuestDetailsNext}
               onBack={prevStep}
@@ -172,7 +269,7 @@ export function CheckoutSteps({
                 productId: data.productId,
                 ticketType: data.ticketType,
                 format: data.format,
-                quantity: actualQuantity,
+                quantity: data.quantity,
                 buyer: data.buyer,
                 tableInfo: data.tableInfo,
               }}
@@ -186,7 +283,7 @@ export function CheckoutSteps({
             <SuccessScreen
               orderId={orderId}
               ticketType={data.ticketType}
-              quantity={actualQuantity}
+              quantity={displayQuantity}
               amountCents={amountCents}
               buyerEmail={data.buyer.email}
               isTable={data.format === "table"}
@@ -201,8 +298,9 @@ export function CheckoutSteps({
           <div className="lg:sticky lg:top-8">
             <OrderSummary
               ticketType={data.ticketType}
+              productKind={productKind}
               format={data.format}
-              quantity={actualQuantity}
+              quantity={displayQuantity}
               pricePerTicket={pricePerTicket}
               eventName={eventName}
               eventDate={eventDate}

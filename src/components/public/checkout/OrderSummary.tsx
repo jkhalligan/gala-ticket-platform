@@ -4,6 +4,7 @@ import { formatCentsToDisplay } from "@/lib/stripe"
 
 interface OrderSummaryProps {
   ticketType: "STANDARD" | "VIP" | "VVIP"
+  productKind: "INDIVIDUAL_TICKET" | "FULL_TABLE" | "CAPTAIN_COMMITMENT"
   format: "individual" | "table"
   quantity: number
   pricePerTicket: number
@@ -21,6 +22,7 @@ const tierLabels: Record<string, string> = {
 
 export function OrderSummary({
   ticketType,
+  productKind,
   format,
   quantity,
   pricePerTicket,
@@ -29,7 +31,11 @@ export function OrderSummary({
   eventName = "Pink Gala 50th Anniversary",
   eventDate = "February 22, 2025",
 }: OrderSummaryProps) {
-  const subtotal = pricePerTicket * quantity
+  // Calculate subtotal based on product kind (matches backend logic)
+  const subtotal = productKind === "FULL_TABLE"
+    ? pricePerTicket
+    : pricePerTicket * quantity
+
   const total = Math.max(0, subtotal - discountCents)
   const isTable = format === "table"
 
