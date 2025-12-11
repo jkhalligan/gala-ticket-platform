@@ -141,15 +141,13 @@ export function DashboardClient({
                       </span>
                     )}
                   </div>
-                  {isAdmin && (
-                    <div className="mt-4">
-                      <Button asChild variant="outline" size="sm">
-                        <Link href={`/admin/tables/${table.slug}`}>
-                          Manage Table
-                        </Link>
-                      </Button>
-                    </div>
-                  )}
+                  <div className="mt-4">
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/dashboard/table/${table.slug}`}>
+                        Manage Table
+                      </Link>
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             ))}
