@@ -239,6 +239,23 @@ export async function PUT(
           { status: 400 }
         );
       }
+
+      // Check if user already has a seat at the new table
+      const duplicateCheck = await prisma.guestAssignment.findFirst({
+        where: {
+          event_id: existingGuest.event_id,
+          table_id: tableId,
+          user_id: existingGuest.user_id,
+          id: { not: id }, // Exclude current assignment
+        },
+      });
+
+      if (duplicateCheck) {
+        return NextResponse.json(
+          { error: "User already has a seat at the target table" },
+          { status: 409 }
+        );
+      }
     }
 
     // Update the guest
@@ -376,6 +393,23 @@ export async function PATCH(
         return NextResponse.json(
           { error: "Table and guest must belong to the same event" },
           { status: 400 }
+        );
+      }
+
+      // Check if user already has a seat at this table
+      const duplicateCheck = await prisma.guestAssignment.findFirst({
+        where: {
+          event_id: existingGuest.event_id,
+          table_id: table_id,
+          user_id: existingGuest.user_id,
+          id: { not: id }, // Exclude current assignment
+        },
+      });
+
+      if (duplicateCheck) {
+        return NextResponse.json(
+          { error: "User already has a seat at this table" },
+          { status: 409 }
         );
       }
     }

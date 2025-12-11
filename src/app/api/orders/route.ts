@@ -215,6 +215,24 @@ export async function POST(request: NextRequest) {
       const referenceCode = await generateGuestReferenceCode(organizationId);
       const tier = product.tier;
 
+      // Check if user already has a seat at this table (if table specified)
+      if (data.table_id) {
+        const existingAssignment = await prisma.guestAssignment.findFirst({
+          where: {
+            event_id: data.event_id,
+            table_id: data.table_id,
+            user_id: invitedUser.id,
+          },
+        });
+
+        if (existingAssignment) {
+          return NextResponse.json(
+            { error: "User already has a seat at this table" },
+            { status: 409 }
+          );
+        }
+      }
+
       await prisma.guestAssignment.create({
         data: {
           event_id: data.event_id,

@@ -456,17 +456,28 @@ async function createZeroDollarOrder(params: {
   const guestReferenceCode = await generateGuestReferenceCode(organization_id);
 
   // Create guest assignment for the captain/buyer
-  await prisma.guestAssignment.create({
-    data: {
+  // Defensive check to prevent duplicate assignments
+  const existingAssignment = await prisma.guestAssignment.findFirst({
+    where: {
       event_id,
-      organization_id,  // Phase 5
       table_id: finalTableId,
       user_id,
-      order_id: order.id,
-      tier: product_tier as any,  // Phase 5
-      reference_code: guestReferenceCode,  // Phase 5
     },
   });
+
+  if (!existingAssignment) {
+    await prisma.guestAssignment.create({
+      data: {
+        event_id,
+        organization_id,  // Phase 5
+        table_id: finalTableId,
+        user_id,
+        order_id: order.id,
+        tier: product_tier as any,  // Phase 5
+        reference_code: guestReferenceCode,  // Phase 5
+      },
+    });
+  }
 
   // Increment promo code usage if applicable
   if (promo_code_id) {

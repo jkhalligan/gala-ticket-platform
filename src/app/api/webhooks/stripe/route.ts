@@ -221,17 +221,28 @@ async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent)
   const guestReferenceCode = await generateGuestReferenceCode(organizationId);
 
   // 7. Create guest assignment for the buyer (first seat)
-  await prisma.guestAssignment.create({
-    data: {
+  // Use defensive check to handle webhook retries idempotently
+  const existingAssignment = await prisma.guestAssignment.findFirst({
+    where: {
       event_id: eventId,
-      organization_id: organizationId,  // Phase 5
       table_id: finalTableId,
       user_id: userId,
-      order_id: order.id,
-      tier: tier as any,  // Phase 5: snapshot from product
-      reference_code: guestReferenceCode,  // Phase 5
     },
   });
+
+  if (!existingAssignment) {
+    await prisma.guestAssignment.create({
+      data: {
+        event_id: eventId,
+        organization_id: organizationId,  // Phase 5
+        table_id: finalTableId,
+        user_id: userId,
+        order_id: order.id,
+        tier: tier as any,  // Phase 5: snapshot from product
+        reference_code: guestReferenceCode,  // Phase 5
+      },
+    });
+  }
 
   // 8. Create placeholder logic note:
   // Remaining seats (quantity - 1) are "placeholder" seats

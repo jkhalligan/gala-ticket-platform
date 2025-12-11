@@ -99,6 +99,28 @@ export async function POST(request: NextRequest) {
           capacity: newTable.capacity,
         }, { status: 200 });
       }
+
+      // Check if any guests already have seats at target table
+      const targetTableConflicts = await prisma.guestAssignment.findMany({
+        where: {
+          table_id: table_id,
+          user_id: { in: guests.map(g => g.user_id) },
+          id: { notIn: guest_ids }, // Exclude the ones being updated
+        },
+        select: { user_id: true, id: true },
+      });
+
+      if (targetTableConflicts.length > 0) {
+        const conflictUserIds = targetTableConflicts.map(c => c.user_id);
+        return NextResponse.json(
+          {
+            error: "Some users already have seats at the target table",
+            conflicts: conflictUserIds,
+            message: `Cannot assign ${targetTableConflicts.length} guest(s) - they already have seats at this table`,
+          },
+          { status: 409 }
+        );
+      }
     }
 
     // Perform bulk update
