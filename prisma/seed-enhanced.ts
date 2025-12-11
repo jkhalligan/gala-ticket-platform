@@ -21,19 +21,25 @@ import {
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-if (!process.env.DATABASE_URL) {
-  console.error("❌ Missing DATABASE_URL environment variable.");
-  process.exit(1);
-}
-
 /**
  * IMPORTANT:
  * Prisma 7 requires a driver adapter for the client engine.
- * This seed uses a hardcoded URL for development convenience.
- * Do not commit production URLs.
+ * This seed uses DATABASE_URL from environment (.env.local).
+ *
+ * Run with: npx tsx prisma/seed-enhanced.ts
+ * Or with dotenv: npx dotenv -e .env.local -- tsx prisma/seed-enhanced.ts
  */
 
-const connectionString = "postgresql://postgres:tTWpZD2UyA7uZOFK@db.nixnsscioujphhnjuuyn.supabase.co:5432/postgres";
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  console.error("❌ Missing DATABASE_URL environment variable.");
+  console.error("Make sure .env.local exists with DATABASE_URL set.");
+  console.error("\nTry running:");
+  console.error("  npx dotenv -e .env.local -- tsx prisma/seed-enhanced.ts");
+  process.exit(1);
+}
+
 const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 
