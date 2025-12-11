@@ -473,8 +473,11 @@ model GuestAssignment {
   
   tags            GuestTag[]
   
-  // Indexes & constraints
+  // Constraints
   @@unique([organization_id, reference_code])    // NEW: required for Sheets sync
+  @@unique([event_id, table_id, user_id])  // ← NEW CONSTRAINT
+  // Indexes
+
   @@index([event_id])
   @@index([table_id])
   @@index([user_id])
