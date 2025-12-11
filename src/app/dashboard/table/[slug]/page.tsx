@@ -35,6 +35,12 @@ export default async function TableDashboardPage({
           event_date: true,
           venue_name: true,
           organization_id: true,
+          organization: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
         },
       },
       primary_owner: {
@@ -178,6 +184,9 @@ export default async function TableDashboardPage({
     can_remove: canEdit && (table.type === "PREPAID" || ga.order?.user_id !== ga.user_id),
   }))
 
+  // Calculate total raised from all completed orders for this table
+  const totalRaisedCents = table.orders.reduce((sum, order) => sum + order.amount_cents, 0)
+
   return (
     <TableDashboard
       table={formattedTable}
@@ -194,6 +203,8 @@ export default async function TableDashboardPage({
       isOwner={isOwner}
       isGuest={isGuest}
       canEdit={canEdit}
+      totalRaisedCents={totalRaisedCents}
+      organizationName={table.event.organization.name}
     />
   )
 }

@@ -18,6 +18,12 @@ import {
 } from "lucide-react"
 import { GuestListCard } from "./GuestListCard"
 import { InviteLinkCard } from "./InviteLinkCard"
+import { HostMessageCard } from "./HostMessageCard"
+import { CaptainNudgeCard } from "./CaptainNudgeCard"
+import { TableStatusCard } from "./TableStatusCard"
+import { TotalImpactCard } from "./TotalImpactCard"
+import { CelebrateButton } from "./CelebrateButton"
+import { getTableThemeVars } from "@/lib/table-theme"
 
 interface TableData {
   id: string
@@ -89,6 +95,8 @@ interface TableDashboardProps {
   isOwner: boolean
   isGuest: boolean
   canEdit: boolean
+  totalRaisedCents: number
+  organizationName: string
 }
 
 export function TableDashboard({
@@ -100,9 +108,21 @@ export function TableDashboard({
   isOwner,
   isGuest,
   canEdit,
+  totalRaisedCents,
+  organizationName,
 }: TableDashboardProps) {
   const isPrepaid = table.type === "PREPAID"
   const isCaptain = table.type === "CAPTAIN_PAYG"
+
+  // Check if captain has purchased their own seat
+  const captainGuest = guests.find(g => g.user_id === table.primary_owner.id)
+  const captainHasPaid = !!captainGuest
+  const showCaptainNudge = isCaptain && isOwner && !captainHasPaid
+
+  // Handler for buying captain's ticket
+  const handleBuyCaptainTicket = () => {
+    window.location.href = `/checkout?table=${table.slug}&type=table`
+  }
 
   // Format event date
   const eventDate = new Date(table.event.event_date).toLocaleDateString("en-US", {
@@ -113,7 +133,7 @@ export function TableDashboard({
   })
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50" style={getTableThemeVars(table.type)}>
       {/* Header */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-4 py-4">
@@ -154,11 +174,21 @@ export function TableDashboard({
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {/* Welcome Message */}
+        {/* Host Message Card */}
         {table.welcome_message && (
-          <Card className="p-4 mb-6 bg-brand-primary/5 border-brand-primary/20">
-            <p className="text-gray-700">{table.welcome_message}</p>
-          </Card>
+          <div className="mb-6">
+            <HostMessageCard
+              welcomeMessage={table.welcome_message}
+              hostName={table.primary_owner.full_name}
+            />
+          </div>
+        )}
+
+        {/* Captain Nudge Card */}
+        {showCaptainNudge && (
+          <div className="mb-6">
+            <CaptainNudgeCard onBuyTicket={handleBuyCaptainTicket} />
+          </div>
         )}
 
         {/* Event Info */}
@@ -197,29 +227,23 @@ export function TableDashboard({
             </div>
           </Card>
 
-          <Card className="p-6">
-            <div>
-              <p className="text-sm text-gray-500 mb-2">Fill Percentage</p>
-              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-brand-primary transition-all"
-                  style={{ width: `${stats.fill_percentage}%` }}
-                />
-              </div>
-              <p className="text-right text-sm font-medium mt-1">{stats.fill_percentage}%</p>
-            </div>
-          </Card>
+          <TableStatusCard
+            filledSeats={stats.total_purchased}
+            capacity={stats.capacity}
+            fillPercentage={stats.fill_percentage}
+            hostName={table.primary_owner.full_name}
+          />
 
           <Card className="p-6">
             <div>
-              <p className="text-sm text-gray-500">Table Status</p>
+              <p className="text-sm text-gray-500">Available Seats</p>
               <p className="text-xl font-semibold text-gray-900 mt-1">
                 {stats.empty_seats === 0 && stats.placeholder_seats === 0 ? (
-                  <span className="text-green-600">Full</span>
+                  <span className="text-green-600">Table Full!</span>
                 ) : stats.placeholder_seats > 0 ? (
                   <span className="text-amber-600">{stats.placeholder_seats} awaiting details</span>
                 ) : (
-                  <span>{stats.empty_seats} seats available</span>
+                  <span>{stats.empty_seats} seats open</span>
                 )}
               </p>
             </div>
@@ -249,6 +273,11 @@ export function TableDashboard({
               tableName={table.name}
             />
 
+            <TotalImpactCard
+              totalRaisedCents={totalRaisedCents}
+              organizationName={organizationName}
+            />
+
             {canEdit && (
               <Card className="p-6">
                 <h3 className="font-semibold text-gray-900 mb-4">Quick Actions</h3>
@@ -263,6 +292,7 @@ export function TableDashboard({
                     <Share2 className="w-4 h-4 mr-2" />
                     Send Email Invitations
                   </Button>
+                  <CelebrateButton />
                 </div>
               </Card>
             )}
