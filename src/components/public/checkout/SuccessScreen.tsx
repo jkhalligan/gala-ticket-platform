@@ -46,10 +46,12 @@ export function SuccessScreen({
   const [countdown, setCountdown] = useState(15)
   const [orderData, setOrderData] = useState<OrderData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [pollingError, setPollingError] = useState<string | null>(null)
   const [showSetupModal, setShowSetupModal] = useState(false)
   const [redirectTarget, setRedirectTarget] = useState<string>("/dashboard")
 
   // Determine final values from either props or fetched data
+  // For table purchases, rely on orderData from polling (which includes table_slug)
   const tableSlug = orderData?.table_slug || initialTableSlug
   const productKind = orderData?.product_kind || initialProductKind
   const isFullTable = productKind === "FULL_TABLE" || isTable
@@ -63,19 +65,22 @@ export function SuccessScreen({
       // We have an actual order ID, just fetch it
       try {
         const res = await fetch(`/api/orders/${orderId}`)
-        if (res.ok) {
-          const data = await res.json()
-          setOrderData({
-            id: data.order.id,
-            status: data.order.status,
-            product_kind: data.order.product?.kind,
-            table_slug: data.order.table?.slug || null,
-            table_name: data.order.table?.name || null,
-          })
-          setLoading(false)
+        if (!res.ok) {
+          throw new Error(`Failed to fetch order: ${res.status}`)
         }
+        const data = await res.json()
+        setOrderData({
+          id: data.order.id,
+          status: data.order.status,
+          product_kind: data.order.product?.kind,
+          table_slug: data.order.table?.slug || null,
+          table_name: data.order.table?.name || null,
+        })
+        setLoading(false)
+        setPollingError(null)
       } catch (err) {
         console.error("Error fetching order:", err)
+        setPollingError(err instanceof Error ? err.message : "Failed to load order details")
         setLoading(false)
       }
       return
@@ -89,30 +94,36 @@ export function SuccessScreen({
     const poll = async () => {
       try {
         const res = await fetch(`/api/orders/by-payment-intent/${orderId}`)
-        if (res.ok) {
-          const data = await res.json()
-          if (data.order.status === "COMPLETED") {
-            setOrderData({
-              id: data.order.id,
-              status: data.order.status,
-              product_kind: data.order.product_kind,
-              table_slug: data.order.table_slug,
-              table_name: data.order.table_name,
-            })
-            setLoading(false)
-            return
-          }
+        if (!res.ok) {
+          throw new Error(`Failed to fetch order: ${res.status}`)
+        }
+        const data = await res.json()
+        if (data.order.status === "COMPLETED") {
+          setOrderData({
+            id: data.order.id,
+            status: data.order.status,
+            product_kind: data.order.product_kind,
+            table_slug: data.order.table_slug,
+            table_name: data.order.table_name,
+          })
+          setLoading(false)
+          setPollingError(null)
+          return
         }
       } catch (err) {
         console.error("Error polling for order:", err)
+        // Don't stop polling on transient errors, just log them
       }
 
       attempts++
       if (attempts < maxAttempts) {
         setTimeout(poll, pollInterval)
       } else {
-        // Max attempts reached, stop loading but may not have full data
+        // Max attempts reached
         setLoading(false)
+        setPollingError(
+          "Order processing is taking longer than expected. Your payment was successful, but the order details may take a moment to appear. Please check your dashboard or refresh the page."
+        )
       }
     }
 
@@ -260,6 +271,13 @@ export function SuccessScreen({
         <div className="flex items-center justify-center gap-2 text-sm text-gray-500 mb-4">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>Setting up your {isFullTable ? "table" : "tickets"}...</span>
+        </div>
+      )}
+
+      {/* Polling error message */}
+      {pollingError && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+          <p className="text-sm text-yellow-800">{pollingError}</p>
         </div>
       )}
 
